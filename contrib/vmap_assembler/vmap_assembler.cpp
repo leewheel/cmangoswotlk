@@ -18,20 +18,30 @@
 
 #include <string>
 #include <iostream>
+#include <filesystem>
 
 #include "TileAssembler.h"
 
 //=======================================================
 int main(int argc, char* argv[])
 {
-    if (argc != 3)
+    std::string src = "Buildings";
+    std::string dest = "vmaps";
+
+    if (argc == 3)
     {
-        std::cout << "usage: " << argv[0] << " <raw data dir> <vmap dest dir>" << std::endl;
+        src = argv[1];
+        dest = argv[2];
+    }
+    else if (argc != 1)
+    {
+        std::cout << "usage: " << argv[0] << " [<raw data dir> <vmap dest dir>]" << std::endl;
+        std::cout << "default: " << argv[0] << " (uses Buildings -> vmaps)" << std::endl; // 默认目录提取，不必加参数
         return 1;
     }
 
-    std::string src = argv[1];
-    std::string dest = argv[2];
+    std::error_code ec;
+    std::filesystem::create_directories(dest, ec);
 
     std::cout << "using " << src << " as source directory and writing output to " << dest << std::endl;
 

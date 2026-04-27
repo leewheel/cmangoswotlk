@@ -103,6 +103,13 @@ static char const* CONF_mpq_list[] =
 static char const* langs[] = {"enGB", "enUS", "deDE", "esES", "frFR", "koKR", "zhCN", "zhTW", "enCN", "enTW", "esMX", "ruRU" };
 #define LANG_COUNT 12
 
+// The extractor only supports classic WDBC layout. Some custom/high-version
+// patch MPQs may contain newer DB formats that break Map.dbc parsing.
+static int CONF_locale_patch_max = 4;
+static int CONF_common_patch_max = 5;
+
+inline void CloseMPQFiles();
+
 void CreateDir(const std::string& Path)
 {
 #ifdef _WIN32
@@ -1142,14 +1149,14 @@ void ExtractCreatureModelFiles(int locale, bool basicLocale)
     printf("Extracted %u CreatureModel files\n", count);
 }
 
-void LoadLocaleMPQFiles(int const locale)
+void LoadLocaleMPQFiles(int const locale, int const maxPatch = CONF_locale_patch_max)
 {
     char filename[512];
 
     sprintf(filename, "%s/Data/%s/locale-%s.MPQ", input_path, langs[locale], langs[locale]);
     new MPQArchive(filename);
 
-    for (int i = 1; i < 5; ++i)
+    for (int i = 1; i <= maxPatch; ++i)
     {
         char ext[3] = "";
         if (i > 1)
@@ -1161,16 +1168,43 @@ void LoadLocaleMPQFiles(int const locale)
     }
 }
 
-void LoadCommonMPQFiles()
+void LoadCommonMPQFiles(int const maxPatch = CONF_common_patch_max)
 {
     char filename[512];
     int count = sizeof(CONF_mpq_list) / sizeof(char*);
     for (int i = 0; i < count; ++i)
     {
+        int patchNumber = 0;
+        if (sscanf(CONF_mpq_list[i], "patch-%d.MPQ", &patchNumber) == 1)
+        {
+            if (patchNumber > maxPatch)
+                continue;
+        }
+        else if (_stricmp(CONF_mpq_list[i], "patch.MPQ") == 0)
+        {
+            patchNumber = 1;
+            if (patchNumber > maxPatch)
+                continue;
+        }
+
         sprintf(filename, "%s/Data/%s", input_path, CONF_mpq_list[i]);
         if (FileExists(filename))
             new MPQArchive(filename);
     }
+}
+
+bool TryPatchWindow(int locale, int localePatchMax, int commonPatchMax, uint32& buildOut)
+{
+    LoadLocaleMPQFiles(locale, localePatchMax);
+    LoadCommonMPQFiles(commonPatchMax);
+
+    buildOut = ReadBuild(locale);
+
+    DBCFile mapdbc("DBFilesClient\\Map.dbc");
+    bool ok = mapdbc.open();
+
+    CloseMPQFiles();
+    return ok;
 }
 
 inline void CloseMPQFiles()
@@ -1188,6 +1222,8 @@ int main(int argc, char* arg[])
 
     int FirstLocale = -1;
     uint32 build = 0;
+    int selectedLocalePatchMax = 4;
+    int selectedCommonPatchMax = 5;
 
     for (int i = 0; i < LANG_COUNT; i++)
     {
@@ -1197,23 +1233,47 @@ int main(int argc, char* arg[])
         {
             printf("Detected locale: %s\n", langs[i]);
 
-            //Open MPQs
-            LoadLocaleMPQFiles(i);
+            if (FirstLocale < 0)
+            {
+                FirstLocale = i;
+                bool foundCompatibleWindow = false;
+                for (int localePatch = 4; localePatch >= 1 && !foundCompatibleWindow; --localePatch)
+                {
+                    for (int commonPatch = 5; commonPatch >= 1; --commonPatch)
+                    {
+                        uint32 testBuild = 0;
+                        if (TryPatchWindow(i, localePatch, commonPatch, testBuild))
+                        {
+                            selectedLocalePatchMax = localePatch;
+                            selectedCommonPatchMax = commonPatch;
+                            build = testBuild;
+                            foundCompatibleWindow = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!foundCompatibleWindow)
+                {
+                    printf("Fatal error: no compatible patch window for Map.dbc parsing was found.\n");
+                    return 1;
+                }
+
+                printf("Detected client build: %u\n", build);
+                printf("Using patch compatibility window: locale<=%d common<=%d\n", selectedLocalePatchMax, selectedCommonPatchMax);
+            }
+
+            //Open MPQs with selected compatibility window
+            LoadLocaleMPQFiles(i, selectedLocalePatchMax);
 
             if ((CONF_extract & EXTRACT_DBC) == 0)
             {
-                FirstLocale = i;
-                build = ReadBuild(FirstLocale);
-                printf("Detected client build: %u\n", build);
                 break;
             }
 
             //Extract DBC files
-            if (FirstLocale < 0)
+            if (FirstLocale == i)
             {
-                FirstLocale = i;
-                build = ReadBuild(FirstLocale);
-                printf("Detected client build: %u\n", build);
                 ExtractDBCFiles(i, true);
             }
             else
@@ -1235,8 +1295,8 @@ int main(int argc, char* arg[])
         printf("Using locale: %s\n", langs[FirstLocale]);
 
         // Open MPQs
-        LoadLocaleMPQFiles(FirstLocale);
-        LoadCommonMPQFiles();
+        LoadLocaleMPQFiles(FirstLocale, selectedLocalePatchMax);
+        LoadCommonMPQFiles(selectedCommonPatchMax);
 
         ExtractCameraFiles(FirstLocale, true);
         // Close MPQs
@@ -1248,8 +1308,8 @@ int main(int argc, char* arg[])
         printf("Using locale: %s\n", langs[FirstLocale]);
 
         // Open MPQs
-        LoadLocaleMPQFiles(FirstLocale);
-        LoadCommonMPQFiles();
+        LoadLocaleMPQFiles(FirstLocale, selectedLocalePatchMax);
+        LoadCommonMPQFiles(selectedCommonPatchMax);
 
         ExtractCreatureModelFiles(FirstLocale, true);
         // Close MPQs
@@ -1261,8 +1321,8 @@ int main(int argc, char* arg[])
         printf("Using locale: %s\n", langs[FirstLocale]);
 
         // Open MPQs
-        LoadLocaleMPQFiles(FirstLocale);
-        LoadCommonMPQFiles();
+        LoadLocaleMPQFiles(FirstLocale, selectedLocalePatchMax);
+        LoadCommonMPQFiles(selectedCommonPatchMax);
 
         // Extract maps
         ExtractMapsFromMpq(build);

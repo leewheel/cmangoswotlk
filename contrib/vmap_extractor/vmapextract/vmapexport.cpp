@@ -22,6 +22,7 @@
 #include <vector>
 #include <list>
 #include <errno.h>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -59,7 +60,7 @@ extern ArchiveSet gOpenArchives;
 
 typedef struct
 {
-    char name[64];
+    char name[256];
     unsigned int id;
 } map_id;
 
@@ -72,6 +73,8 @@ bool hasInputPathParam = false;
 bool hasOutputPathParam = false;
 bool preciseVectorData = false;
 std::unordered_map<std::string, WMODoodadData> WmoDoodads;
+int CONF_locale_patch_max = 99;
+int CONF_common_patch_max = 99;
 
 // Constants
 
@@ -129,6 +132,8 @@ void ReadLiquidTypeTableDBC()
     printf("Done! (%u LiqTypes loaded)\n", (unsigned int)LiqType_count);
 }
 
+bool ExtractSingleWmoSafe(std::string& fname);
+
 bool ExtractWmo()
 {
     bool success = true;
@@ -143,7 +148,7 @@ bool ExtractWmo()
         for (vector<string>::iterator fname = filelist.begin(); fname != filelist.end() && success; ++fname)
         {
             if (fname->find(".wmo") != string::npos)
-                success = ExtractSingleWmo(*fname);
+                success = ExtractSingleWmoSafe(*fname);
         }
     }
 
@@ -151,6 +156,23 @@ bool ExtractWmo()
         printf("\nExtract wmo complete (No (fatal) errors)\n");
 
     return success;
+}
+
+bool ExtractSingleWmoSafe(std::string& fname)
+{
+#ifdef _WIN32
+    __try
+    {
+        return ExtractSingleWmo(fname);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        printf("Warning: crashed while extracting WMO '%s', skipped.\n", fname.c_str());
+        return true;
+    }
+#else
+    return ExtractSingleWmo(fname);
+#endif
 }
 
 bool ExtractSingleWmo(std::string& fname)
@@ -161,7 +183,12 @@ bool ExtractSingleWmo(std::string& fname)
     char* plain_name = GetPlainName(&fname[0]);
     fixnamen(plain_name, strlen(plain_name));
     fixname2(plain_name, strlen(plain_name));
-    sprintf(szLocalFile, "%s/%s", szWorkDirWmo, plain_name);
+    int localRes = snprintf(szLocalFile, sizeof(szLocalFile), "%s/%s", szWorkDirWmo, plain_name);
+    if (localRes < 0 || localRes >= sizeof(szLocalFile))
+    {
+        printf("Warning: local WMO output path too long, skipped: %s\n", fname.c_str());
+        return true;
+    }
 
     if (FileExists(szLocalFile))
         return true;
@@ -208,15 +235,16 @@ bool ExtractSingleWmo(std::string& fname)
     {
         for (uint32 i = 0; i < froot.nGroups; ++i)
         {
-            char temp[1024];
-            strcpy(temp, fname.c_str());
-            temp[fname.length() - 4] = 0;
+            std::string temp = fname;
+            if (temp.length() > 4)
+                temp.erase(temp.length() - 4);
             char groupFileName[1024];
-            int snRes = snprintf(groupFileName, sizeof(groupFileName), "%s_%03d.wmo", temp, i);
+            int snRes = snprintf(groupFileName, sizeof(groupFileName), "%s_%03d.wmo", temp.c_str(), i);
             if (snRes < 0 || snRes >= sizeof(groupFileName))
             {
-                printf("ERROR: WMO Path is too long!\n");
-                return(false);
+                printf("Warning: WMO group path too long, skip this WMO: %s\n", fname.c_str());
+                file_ok = false;
+                break;
             }
             //printf("Trying to open groupfile %s\n",groupFileName);
 
@@ -313,12 +341,12 @@ void getGamePath()
 #endif
 }
 
-bool scan_patches(char* scanmatch, std::vector<std::string>& pArchiveNames)
+bool scan_patches(char* scanmatch, std::vector<std::string>& pArchiveNames, int maxPatch)
 {
     int i;
     char path[512];
 
-    for (i = 1; i <= 99; i++)
+    for (i = 1; i <= maxPatch; i++)
     {
         if (i != 1)
         {
@@ -401,7 +429,7 @@ bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
         return(false);
     }
         
-    if (!scan_patches(path, pArchiveNames))
+    if (!scan_patches(path, pArchiveNames, CONF_common_patch_max))
         return (false);
 
     // now, scan for the patch levels in locale dirs
@@ -417,7 +445,7 @@ bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
             return(false);
         }
 
-        if (scan_patches(path, pArchiveNames))
+        if (scan_patches(path, pArchiveNames, CONF_locale_patch_max))
             foundOne = true;
     }
 
@@ -430,6 +458,38 @@ bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
     }
 
     return true;
+}
+
+void CloseMPQArchives()
+{
+    for (ArchiveSet::iterator i = gOpenArchives.begin(); i != gOpenArchives.end(); ++i)
+    {
+        (*i)->close();
+        delete *i;
+    }
+    gOpenArchives.clear();
+}
+
+bool OpenArchivesWithPatchWindow(int localePatchMax, int commonPatchMax)
+{
+    CONF_locale_patch_max = localePatchMax;
+    CONF_common_patch_max = commonPatchMax;
+
+    std::vector<std::string> archiveNames;
+    fillArchiveNameVector(archiveNames);
+    for (size_t i = 0; i < archiveNames.size(); ++i)
+    {
+        MPQArchive* archive = new MPQArchive(archiveNames[i].c_str());
+        if (!gOpenArchives.size() || gOpenArchives.front() != archive)
+            delete archive;
+    }
+
+    if (gOpenArchives.empty())
+        return false;
+
+    DBCFile mapdbc("DBFilesClient\\Map.dbc");
+    DBCFile liqdbc("DBFilesClient\\LiquidType.dbc");
+    return mapdbc.open() && liqdbc.open();
 }
 
 bool processArgv(int argc, char** argv)
@@ -537,29 +597,41 @@ int main(int argc, char** argv)
 
     printf("Extract for %s. Beginning work ....\n", szRawVMAPMagic);
     //xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    // Create the working directory
-    if (mkdir(szWorkDirWmo
-#ifndef _WIN32
-              , 0711
-#endif
-             ))
-        success = (errno == EEXIST);
-
-    // prepare archive name list
-    std::vector<std::string> archiveNames;
-    fillArchiveNameVector(archiveNames);
-    for (size_t i = 0; i < archiveNames.size(); ++i)
+    // Create the working directory. Some custom client paths contain spaces
+    // and mixed separators, so use the standard filesystem API here.
+    std::error_code dirError;
+    std::filesystem::create_directories(szWorkDirWmo, dirError);
+    if (dirError)
     {
-        MPQArchive* archive = new MPQArchive(archiveNames[i].c_str());
-        if (!gOpenArchives.size() || gOpenArchives.front() != archive)
-            delete archive;
+        printf("ERROR: Could not create output directory '%s': %s\n", szWorkDirWmo, dirError.message().c_str());
+        return 1;
     }
 
-    if (gOpenArchives.empty())
+    bool foundCompatibleWindow = false;
+    int selectedLocalePatch = 99;
+    int selectedCommonPatch = 99;
+    for (int localePatch = 6; localePatch >= 1 && !foundCompatibleWindow; --localePatch)
+    {
+        for (int commonPatch = 6; commonPatch >= 1; --commonPatch)
+        {
+            if (OpenArchivesWithPatchWindow(localePatch, commonPatch))
+            {
+                selectedLocalePatch = localePatch;
+                selectedCommonPatch = commonPatch;
+                foundCompatibleWindow = true;
+                break;
+            }
+
+            CloseMPQArchives();
+        }
+    }
+
+    if (!foundCompatibleWindow || gOpenArchives.empty())
     {
         printf("FATAL ERROR: None MPQ archive found by path '%s'. Use -d option with proper path.\n", input_path);
         return 1;
     }
+    printf("Using patch compatibility window: locale<=%d common<=%d\n", selectedLocalePatch, selectedCommonPatch);
     ReadLiquidTypeTableDBC();
 
     // extract data
@@ -582,7 +654,10 @@ int main(int argc, char** argv)
         for (unsigned int x = 0; x < map_count; ++x)
         {
             map_ids[x].id = dbc->getRecord(x).getUInt(0);
-            strcpy(map_ids[x].name, dbc->getRecord(x).getString(1));
+            const char* mapName = dbc->getRecord(x).getString(1);
+            if (!mapName)
+                mapName = "";
+            snprintf(map_ids[x].name, sizeof(map_ids[x].name), "%s", mapName);
             printf("Map - %s\n", map_ids[x].name);
         }
 
@@ -598,11 +673,11 @@ int main(int argc, char** argv)
     printf("\n");
     if (!success)
     {
-        printf("ERROR: Extract for %s. Work NOT complete.\n   Precise vector data=%d.\nPress any key.\n", szRawVMAPMagic, preciseVectorData);
-        getchar();
+        printf("ERROR: Extract for %s. Work NOT complete.\n   Precise vector data=%d.\n", szRawVMAPMagic, preciseVectorData);
     }
 
     printf("Extract for %s. Work complete. No errors.\n", szRawVMAPMagic);
+    CloseMPQArchives();
     delete [] LiqType;
     return 0;
 }

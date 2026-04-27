@@ -201,7 +201,9 @@ if(POLICY CMP0144)
 endif()
 
 if(POLICY CMP0167)
-  cmake_policy(SET CMP0167 NEW)
+  # Keep legacy FindBoost behavior for prebuilt Boost layouts on Windows
+  # (e.g. C:/local/boost_xxx with lib64-msvc-* folders and no BoostConfig.cmake).
+  cmake_policy(SET CMP0167 OLD)
 endif()
 
 # Find needed packages and if necessery abort if something important is missing

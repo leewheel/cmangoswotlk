@@ -19,6 +19,7 @@
 include(FetchContent)
 # avoid online check when already downloaded (little speed up)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+set(LOCAL_ZLIB_SOURCE_DIR "" CACHE PATH "Path to local zlib source directory (offline fallback)")
 
 if(BUILD_EXTRACTORS AND NOT (BZip2_FOUND OR BZIP2_FOUND))
   add_subdirectory(bzip2)
@@ -27,27 +28,35 @@ endif()
 # zlib
 find_package(ZLIB CONFIG COMPONENTS static)
 if (NOT ZLIB_FOUND OR ZLIB_VERSION_STRING VERSION_LESS 1.3.1)
-  FetchContent_Declare(
-    zlib
-    GIT_REPOSITORY "https://github.com/madler/zlib.git"
-    GIT_TAG "v1.3.1"
-  )
-  FetchContent_GetProperties(zlib)
-  if(NOT zlib_POPULATED)
-    message(STATUS "Setting up zlib ...")
-    FetchContent_MakeAvailable(zlib)
-    set(SKIP_INSTALL_ALL true)
-    set(ZLIB_BUILD_SHARED false)
-    set(BUILD_SHARED false)
-    set(ZLIB_BUILD_STATIC true)
-    set(BUILD_STATIC true)
-    # patch provided cmake to avoid unneeded target install and deprecation warning.
-    #file(COPY_FILE "patch-zlib-CMakeLists.txt" "${zlib_SOURCE_DIR}/CMakeLists.txt" ONLY_IF_DIFFERENT) #not working on cmake < 3.21 so replaced with 3 next lines
-    file(COPY "patch-zlib-CMakeLists.txt" DESTINATION "${zlib_SOURCE_DIR}")
-    file(REMOVE "${zlib_SOURCE_DIR}/CMakeLists.txt")
-    file(RENAME "${zlib_SOURCE_DIR}/patch-zlib-CMakeLists.txt" "${zlib_SOURCE_DIR}/CMakeLists.txt")
+  if(LOCAL_ZLIB_SOURCE_DIR AND EXISTS "${LOCAL_ZLIB_SOURCE_DIR}/zlib.h")
+    message(STATUS "Setting up zlib from local source: ${LOCAL_ZLIB_SOURCE_DIR}")
+    set(zlib_SOURCE_DIR "${LOCAL_ZLIB_SOURCE_DIR}")
+    set(zlib_BINARY_DIR "${CMAKE_BINARY_DIR}/_deps/zlib-build")
+    add_subdirectory("${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}" EXCLUDE_FROM_ALL)
     target_include_directories(zlib PUBLIC ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
-    message(STATUS "zlib ${ZLIB_FULL_VERSION} successfully installed!")
+  else()
+    FetchContent_Declare(
+      zlib
+      GIT_REPOSITORY "https://github.com/madler/zlib.git"
+      GIT_TAG "v1.3.1"
+    )
+    FetchContent_GetProperties(zlib)
+    if(NOT zlib_POPULATED)
+      message(STATUS "Setting up zlib ...")
+      FetchContent_MakeAvailable(zlib)
+      set(SKIP_INSTALL_ALL true)
+      set(ZLIB_BUILD_SHARED false)
+      set(BUILD_SHARED false)
+      set(ZLIB_BUILD_STATIC true)
+      set(BUILD_STATIC true)
+      # patch provided cmake to avoid unneeded target install and deprecation warning.
+      #file(COPY_FILE "patch-zlib-CMakeLists.txt" "${zlib_SOURCE_DIR}/CMakeLists.txt" ONLY_IF_DIFFERENT) #not working on cmake < 3.21 so replaced with 3 next lines
+      file(COPY "patch-zlib-CMakeLists.txt" DESTINATION "${zlib_SOURCE_DIR}")
+      file(REMOVE "${zlib_SOURCE_DIR}/CMakeLists.txt")
+      file(RENAME "${zlib_SOURCE_DIR}/patch-zlib-CMakeLists.txt" "${zlib_SOURCE_DIR}/CMakeLists.txt")
+      target_include_directories(zlib PUBLIC ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
+      message(STATUS "zlib ${ZLIB_FULL_VERSION} successfully installed!")
+    endif()
   endif()
 else()
   add_library(zlib INTERFACE)
