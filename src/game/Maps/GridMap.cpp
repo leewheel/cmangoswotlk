@@ -139,7 +139,7 @@ bool GridMap::loadData(char const* filename)
         return true;
     }
 
-    sLog.outError("Map file '%s' has the wrong version. Please extract the mapfiles again with the latest extractors.", filename);
+    sLog.outError("Map file '%s' has the wrong version or client build. Header mapMagic=0x%08X versionMagic=0x%08X build=%u, expected build(s): %s. Please extract the mapfiles again with the latest extractors.", filename, header.mapMagic, header.versionMagic, header.buildMagic, AcceptableClientBuildsListStr().c_str());
     fclose(in);
     return false;
 }
@@ -682,7 +682,7 @@ bool GridMap::ExistMap(uint32 mapid, int gx, int gy)
             header.versionMagic != *((uint32 const*)(MAP_VERSION_MAGIC)) ||
             !IsAcceptableClientBuild(header.buildMagic))
     {
-        sLog.outError("Map file '%s' is has the wrong version. Please extract the mapfiles again with the latest extractors.", tmp);
+        sLog.outError("Map file '%s' has the wrong version or client build. Header mapMagic=0x%08X versionMagic=0x%08X build=%u, expected build(s): %s. Please extract the mapfiles again with the latest extractors.", tmp, header.mapMagic, header.versionMagic, header.buildMagic, AcceptableClientBuildsListStr().c_str());
         delete[] tmp;
         fclose(pf);                                         // close file before return
         return false;
