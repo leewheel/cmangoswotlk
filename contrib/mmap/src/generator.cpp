@@ -17,24 +17,55 @@
  */
 
 #include <sstream>
+#include <cstring>
+#include <filesystem>
 
 #include "MMapCommon.h"
 #include "MapBuilder.h"
 
 using namespace MMAP;
 
-bool checkDirectories(bool debugOutput, const char* workdir)
+static bool directoryHasAnyFile(const std::filesystem::path& dir)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec))
+        return false;
+
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+        return true;
+
+    return false;
+}
+
+static bool directoryHasVmtree(const std::filesystem::path& dir)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec))
+        return false;
+
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if (it->path().extension() == ".vmtree")
+            return true;
+    }
+
+    return false;
+}
+
+bool checkDirectories(bool debugOutput, const char* workdir, bool verbose = true)
 {
     vector<string> dirFiles;
     char maps_dir[1024];
     char vmaps_dir[1024];
     char mmaps_dir[1024];
     char meshes_dir[1024];
+    std::error_code ec;
 
     sprintf(maps_dir, "%s/%s", workdir, "maps");
     if (getDirContents(dirFiles, maps_dir) == LISTFILE_DIRECTORY_NOT_FOUND || !dirFiles.size())
     {
-        printf("'%s' directory is empty or does not exist\n", maps_dir);
+        if (verbose)
+            printf("'%s' directory is empty or does not exist\n", maps_dir);
         return false;
     }
 
@@ -42,7 +73,8 @@ bool checkDirectories(bool debugOutput, const char* workdir)
     sprintf(vmaps_dir, "%s/%s", workdir, "vmaps");
     if (getDirContents(dirFiles, vmaps_dir, "*.vmtree") == LISTFILE_DIRECTORY_NOT_FOUND || !dirFiles.size())
     {
-        printf("'%s' directory is empty or does not exist\n", vmaps_dir);
+        if (verbose)
+            printf("'%s' directory is empty or does not exist\n", vmaps_dir);
         return false;
     }
 
@@ -50,8 +82,13 @@ bool checkDirectories(bool debugOutput, const char* workdir)
     sprintf(mmaps_dir, "%s/%s", workdir, "mmaps");
     if (getDirContents(dirFiles, mmaps_dir) == LISTFILE_DIRECTORY_NOT_FOUND)
     {
-        printf("'%s' directory does not exist\n", mmaps_dir);
-        return false;
+        std::filesystem::create_directories(mmaps_dir, ec);
+        if (ec)
+        {
+            if (verbose)
+                printf("'%s' directory does not exist and could not be created: %s\n", mmaps_dir, ec.message().c_str());
+            return false;
+        }
     }
 
     dirFiles.clear();
@@ -60,8 +97,14 @@ bool checkDirectories(bool debugOutput, const char* workdir)
         sprintf(meshes_dir, "%s/%s", workdir, "meshes");
         if (getDirContents(dirFiles, meshes_dir) == LISTFILE_DIRECTORY_NOT_FOUND)
         {
-            printf("'%s' directory does not exist (no place to put debugOutput files)\n", meshes_dir);
-            return false;
+            ec.clear();
+            std::filesystem::create_directories(meshes_dir, ec);
+            if (ec)
+            {
+                if (verbose)
+                    printf("'%s' directory does not exist and could not be created: %s\n", meshes_dir, ec.message().c_str());
+                return false;
+            }
         }
     }
 
@@ -85,7 +128,7 @@ void printUsage()
     printf("--buildGameObjects : builds only gameobject models for transports\n\n");
     printf("--buildAlternate : builds only tiles with GOs inside (including default tile)\n\n");
     printf("--threads [#]: specifies number of threads to use for maps processing\n\n");
-    printf("--workdir [directory] : Path to basedir of maps/vmaps.\n\n");
+    printf("--workdir [directory] : Path to basedir of maps/vmaps (default auto: ./ClientData then ./).\n\n");
     printf("Example:\nmovemapgen (generate all mmap with default arg\n"
            "movemapgen \"1 0 169\" (generate maps 1, 0 and 169)\n"
            "movemapgen 0 --tile 34,46 (builds only tile 34,46 of map 0)\n\n");
@@ -289,10 +332,21 @@ int main(int argc, char** argv)
             return 0;
     }
 
-    if (!checkDirectories(debug, workdir))
+    const char* effectiveWorkdir = workdir;
+    if (strcmp(workdir, "./") == 0)
+    {
+        if (directoryHasAnyFile("./ClientData/maps") && directoryHasVmtree("./ClientData/vmaps") && checkDirectories(debug, "./ClientData", false))
+        {
+            effectiveWorkdir = "./ClientData";
+            if (!silent)
+                printf("Auto-detected workdir: %s\n", effectiveWorkdir);
+        }
+    }
+
+    if (!checkDirectories(debug, effectiveWorkdir))
         return -3;
 
-    MapBuilder builder(configInputPath, threads, skipLiquid, skipContinents, skipJunkMaps, skipBattlegrounds, debug, buildAlternate, offMeshInputPath, workdir);
+    MapBuilder builder(configInputPath, threads, skipLiquid, skipContinents, skipJunkMaps, skipBattlegrounds, debug, buildAlternate, offMeshInputPath, effectiveWorkdir);
 
     if (mapIds.size() == 1 && tileX > -1 && tileY > -1)
         builder.buildSingleTile(mapIds.front(), tileX, tileY);

@@ -19,38 +19,16 @@ class MPQArchive
 
     public:
         mpq_archive_s* mpq_a;
+        std::string filename;
+        std::string lastError;
 
         MPQArchive(const char* filename);
+        ~MPQArchive();
         void close();
+        bool ExtractFileTo(char const* mpq_name, std::string const& output_filename);
+        char const* LastError() const { return lastError.c_str(); }
 
-        void GetFileListTo(vector<string>& filelist)
-        {
-            uint32 filenum;
-            if (libmpq__file_number(mpq_a, "(listfile)", &filenum)) return;
-            libmpq__off_t size, transferred;
-            libmpq__file_unpacked_size(mpq_a, filenum, &size);
-
-            char* buffer = new char[size];
-
-            libmpq__file_read(mpq_a, filenum, (unsigned char*)buffer, size, &transferred);
-
-            char seps[] = "\n";
-            char* token;
-
-            token = strtok(buffer, seps);
-            uint32 counter = 0;
-            while ((token != NULL) && (counter < size))
-            {
-                //cout << token << endl;
-                token[strlen(token) - 1] = 0;
-                string s = token;
-                filelist.push_back(s);
-                counter += strlen(token) + 2;
-                token = strtok(NULL, seps);
-            }
-
-            delete[] buffer;
-        }
+        void GetFileListTo(vector<string>& filelist);
 };
 typedef std::deque<MPQArchive*> ArchiveSet;
 

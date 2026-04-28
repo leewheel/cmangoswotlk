@@ -3,15 +3,21 @@
 
 #include <sstream>
 #include <fstream>
+#include <filesystem>
+#include <string>
 
 #include <stdio.h>
 #include <deque>
 #include <set>
 #include <cstdlib>
+#include <cstring>
+#include <cstdarg>
 #include <iomanip>
+#include <exception>
 
 #ifdef _WIN32
 #include "direct.h"
+#include <windows.h>
 #else
 #include <sys/stat.h>
 #endif
@@ -57,9 +63,120 @@ typedef struct
 map_id* map_ids;
 uint16* areas;
 uint16* LiqType;
-char output_path[128] = ".";
-char input_path[128] = ".";
+char output_path[1024] = ".";
+char input_path[1024] = ".";
+static bool s_outputPathExplicit = false;
 uint32 maxAreaId = 0;
+static FILE* g_adLog = nullptr;
+static std::string g_adCurrentPhase = "starting";
+static std::string g_adCurrentArchive;
+static std::string g_adCurrentFile;
+static uint32 g_missingRequiredDbc = 0;
+
+struct ExtractSummary
+{
+    uint32 dbcUnique = 0;
+    uint32 dbcWrites = 0;
+    uint32 componentWrites = 0;
+    uint32 mapFiles = 0;
+    uint32 cameraFiles = 0;
+    uint32 creatureModelFiles = 0;
+};
+
+static ExtractSummary g_extractSummary;
+
+void SetAdProgress(char const* phase, char const* archive = nullptr, char const* file = nullptr)
+{
+    g_adCurrentPhase = phase ? phase : "";
+    g_adCurrentArchive = archive ? archive : "";
+    g_adCurrentFile = file ? file : "";
+}
+
+void ReportFatalAdError(char const* kind, unsigned long code = 0)
+{
+    fprintf(stderr, "\n[严重错误] ad.exe 异常退出。\n");
+    if (code)
+        fprintf(stderr, "异常代码: 0x%08lX\n", code);
+    fprintf(stderr, "当前阶段: %s\n", g_adCurrentPhase.c_str());
+    if (!g_adCurrentArchive.empty())
+        fprintf(stderr, "当前 MPQ: %s\n", g_adCurrentArchive.c_str());
+    if (!g_adCurrentFile.empty())
+        fprintf(stderr, "当前文件: %s\n", g_adCurrentFile.c_str());
+    fprintf(stderr, "请查看日志: %s/ad_extract.log\n", output_path);
+    fprintf(stderr, "DBC 详情: %s/dbc/dbc_extract.log\n", output_path);
+
+    if (g_adLog)
+    {
+        fprintf(g_adLog, "\n[严重错误] ad.exe 异常退出。\n");
+        if (kind)
+            fprintf(g_adLog, "错误类型: %s\n", kind);
+        if (code)
+            fprintf(g_adLog, "异常代码: 0x%08lX\n", code);
+        fprintf(g_adLog, "当前阶段: %s\n", g_adCurrentPhase.c_str());
+        if (!g_adCurrentArchive.empty())
+            fprintf(g_adLog, "当前 MPQ: %s\n", g_adCurrentArchive.c_str());
+        if (!g_adCurrentFile.empty())
+            fprintf(g_adLog, "当前文件: %s\n", g_adCurrentFile.c_str());
+        fflush(g_adLog);
+    }
+}
+
+#ifdef _WIN32
+LONG WINAPI AdUnhandledExceptionFilter(EXCEPTION_POINTERS* info)
+{
+    unsigned long code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
+    ReportFatalAdError("Windows SEH", code);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
+void AdTerminateHandler()
+{
+    ReportFatalAdError("C++ terminate");
+    std::_Exit(3);
+}
+
+void LogAd(char const* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    va_list copy;
+    va_copy(copy, args);
+
+    vprintf(fmt, args);
+    if (g_adLog)
+    {
+        vfprintf(g_adLog, fmt, copy);
+        fflush(g_adLog);
+    }
+
+    va_end(copy);
+    va_end(args);
+}
+
+void OpenAdLog()
+{
+    std::string logName = output_path;
+    logName += "/ad_extract.log";
+    g_adLog = fopen(logName.c_str(), "wb");
+    if (g_adLog)
+    {
+        LogAd("ad.exe extraction log\n");
+        LogAd("=====================\n");
+        LogAd("Input directory : %s\n", input_path);
+        LogAd("Output directory: %s\n\n", output_path);
+    }
+    else
+        printf("Warning: cannot create ad log file '%s'\n", logName.c_str());
+}
+
+void CloseAdLog()
+{
+    if (!g_adLog)
+        return;
+    fclose(g_adLog);
+    g_adLog = nullptr;
+}
 
 //**************************************************
 // Extractor options
@@ -123,19 +240,142 @@ static char const* langs[] = {"enGB", "enUS", "deDE", "esES", "frFR", "koKR", "z
 // MPQFile checks archives in reverse opening order. Open common archives first
 // and locale archives second so localized DBCs override common fallback data,
 // matching Trinity/AzerothCore-style extractor behavior.
-static int CONF_locale_patch_max = 4;
+static int CONF_locale_patch_max = 5;
 static int CONF_common_patch_max = 5;
-static uint32 const EXPECTED_WOTLK_CLIENT_BUILD = 12340;
+static uint32 const EXPECTED_CLIENT_BUILD = 12340;
+
+static char const* REQUIRED_SERVER_DBC_FILES[] =
+{
+    "DBFilesClient\\BattlemasterList.dbc",
+    "DBFilesClient\\DestructibleModelData.dbc",
+    "DBFilesClient\\Faction.dbc",
+    "DBFilesClient\\LFGDungeons.dbc",
+    "DBFilesClient\\LFGDungeonExpansion.dbc",
+    "DBFilesClient\\Map.dbc",
+    "DBFilesClient\\QuestFactionReward.dbc",
+    "DBFilesClient\\QuestXP.dbc",
+    "DBFilesClient\\PvpDifficulty.dbc",
+    "DBFilesClient\\SpellDifficulty.dbc",
+    "DBFilesClient\\TeamContributionPoints.dbc",
+};
+
+static bool IsRequiredServerDbc(std::string const& name)
+{
+    for (char const* requiredDbc : REQUIRED_SERVER_DBC_FILES)
+        if (name == requiredDbc)
+            return true;
+    return false;
+}
+
+static std::string MakeComponentBuildInfo(char const* locale)
+{
+    std::ostringstream ss;
+    ss << "<componentinfo format=\"1\">\n"
+       << "    <component name=\"wow-" << locale << "\" version=\"" << EXPECTED_CLIENT_BUILD << "\" />\n"
+       << "</componentinfo>\n";
+    return ss.str();
+}
+
+static bool WriteNormalizedComponentBuildInfo(std::string const& outputFile, char const* locale)
+{
+    FILE* file = fopen(outputFile.c_str(), "wb");
+    if (!file)
+        return false;
+
+    std::string text = MakeComponentBuildInfo(locale);
+    bool ok = fwrite(text.data(), 1, text.size(), file) == text.size();
+    fclose(file);
+    return ok;
+}
 
 inline void CloseMPQFiles();
 
 void CreateDir(const std::string& Path)
 {
-#ifdef _WIN32
-    _mkdir(Path.c_str());
-#else
-    mkdir(Path.c_str(), 0777);
-#endif
+    std::error_code ec;
+    std::filesystem::create_directories(Path, ec);
+}
+
+static void WarnSuspiciousOutputPath(const char* p)
+{
+    if (!p || !p[0])
+        return;
+    if (strncmp(p, "...", 3) == 0)
+        printf("Warning: -o starts with \"...\" - on Windows this is a literal folder name, not shorthand.\nUse a full path, e.g. -o \"E:\\Cmangos\\ClientData\"\n");
+    if (strstr(p, "\\...\\") || strstr(p, "/.../"))
+        printf("Warning: -o contains a path segment \"...\" (three dots). That is a normal folder name, not \"parent directory\" (use .. for that).\n");
+}
+
+/* Make paths absolute and ensure output root exists so fopen does not fail on missing parents. */
+static void PreparePathsAfterArgs()
+{
+    std::error_code ec;
+    std::filesystem::path in(input_path);
+    if (!in.empty())
+    {
+        std::filesystem::path absIn = std::filesystem::absolute(in, ec);
+        if (!ec)
+        {
+            std::string s = absIn.string();
+            if (s.size() >= sizeof(input_path))
+            {
+                printf("Fatal: input path too long (max %zu chars).\n", sizeof(input_path) - 1);
+                exit(1);
+            }
+            strncpy(input_path, s.c_str(), sizeof(input_path) - 1);
+            input_path[sizeof(input_path) - 1] = '\0';
+        }
+    }
+
+    if (!s_outputPathExplicit)
+    {
+        std::filesystem::path def = std::filesystem::path(input_path) / "ClientData";
+        def = std::filesystem::absolute(def, ec);
+        if (ec)
+        {
+            printf("Fatal: cannot resolve default output path (<input>/ClientData): %s\n", ec.message().c_str());
+            exit(1);
+        }
+        std::string ds = def.string();
+        if (ds.size() >= sizeof(output_path))
+        {
+            printf("Fatal: default output path too long (max %zu chars).\n", sizeof(output_path) - 1);
+            exit(1);
+        }
+        strncpy(output_path, ds.c_str(), sizeof(output_path) - 1);
+        output_path[sizeof(output_path) - 1] = '\0';
+        printf("No -o: writing to game folder: %s\n", output_path);
+        printf("    (copy this ClientData folder to your server run directory when done.)\n\n");
+    }
+    else
+        WarnSuspiciousOutputPath(output_path);
+
+    ec.clear();
+    std::filesystem::path out(output_path);
+    if (out.empty())
+        return;
+    std::filesystem::path absOut = std::filesystem::absolute(out, ec);
+    if (ec)
+    {
+        printf("Fatal: invalid output path \"%s\": %s\n", output_path, ec.message().c_str());
+        exit(1);
+    }
+    std::string os = absOut.string();
+    if (os.size() >= sizeof(output_path))
+    {
+        printf("Fatal: output path too long (max %zu chars).\n", sizeof(output_path) - 1);
+        exit(1);
+    }
+    strncpy(output_path, os.c_str(), sizeof(output_path) - 1);
+    output_path[sizeof(output_path) - 1] = '\0';
+
+    std::filesystem::create_directories(absOut, ec);
+    if (ec)
+    {
+        printf("Fatal: cannot create output directory \"%s\": %s\n", output_path, ec.message().c_str());
+        exit(1);
+    }
+    printf("Output directory: %s\n\n", output_path);
 }
 
 bool FileExists(const char* FileName)
@@ -155,11 +395,12 @@ void Usage(char* prg)
     printf(
         "Usage:\n"\
         "%s -[var] [value]\n"\
-        "-i set input path\n"\
-        "-o set output path\n"\
+        "-i WoW install root (folder that contains Data\\)\n"\
+        "-o output folder (optional; default is <input>\\ClientData next to your game)\n"\
         "-e extract only MAP(1)/DBC(2)/Camera(4)/Attachment(8) - standard: all(15)\n"\
         "-f height stored as int (less map size but lost some accuracy) 1 by default\n"\
-        "Example: %s -f 0 -i \"c:\\games\\game\"", prg, prg);
+        "Typical: %s -e 2 -i \"c:\\games\\wow-3.3.5a\"\n"\
+        "Override output: %s -e 2 -i \"c:\\games\\wow\" -o \"d:\\server\\ClientData\"", prg, prg, prg);
     exit(1);
 }
 
@@ -178,14 +419,21 @@ void HandleArgs(int argc, char* arg[])
         switch (arg[c][1])
         {
             case 'i':
-                if (c + 1 < argc)                           // all ok
-                    strcpy(input_path, arg[(c++) + 1]);
+                if (c + 1 < argc)
+                {
+                    strncpy(input_path, arg[(c++) + 1], sizeof(input_path) - 1);
+                    input_path[sizeof(input_path) - 1] = '\0';
+                }
                 else
                     Usage(arg[0]);
                 break;
             case 'o':
-                if (c + 1 < argc)                           // all ok
-                    strcpy(output_path, arg[(c++) + 1]);
+                if (c + 1 < argc)
+                {
+                    s_outputPathExplicit = true;
+                    strncpy(output_path, arg[(c++) + 1], sizeof(output_path) - 1);
+                    output_path[sizeof(output_path) - 1] = '\0';
+                }
                 else
                     Usage(arg[0]);
                 break;
@@ -222,7 +470,8 @@ uint32 ReadBuild(int locale)
         exit(1);
     }
 
-    std::string text = m.getPointer();
+    /* MPQ payload is not NUL-terminated; never construct std::string from getPointer(). */
+    std::string text(m.getBuffer(), static_cast<size_t>(m.getSize()));
     m.close();
 
     size_t pos = text.find("version=\"");
@@ -243,29 +492,38 @@ uint32 ReadBuild(int locale)
         exit(1);
     }
 
-    return build;
-}
-
-uint32 NormalizeBuildForServer(uint32 build)
-{
-    if (build != EXPECTED_WOTLK_CLIENT_BUILD)
-        printf("Client build %u is MPQ/component metadata; writing extracted data as supported WotLK build %u.\n", build, EXPECTED_WOTLK_CLIENT_BUILD);
-
-    return EXPECTED_WOTLK_CLIENT_BUILD;
-}
-
-bool WriteBuildInfoFile(std::string const& filename, int locale, uint32 build)
-{
-    FILE* output = fopen(filename.c_str(), "wb");
-    if (!output)
+    if (uint32(build) != EXPECTED_CLIENT_BUILD)
     {
-        printf("Can't create the output file '%s'\n", filename.c_str());
-        return false;
+        LogAd("MPQ component build is %u; writing map/DBC build metadata as server client build %u.\n", build, EXPECTED_CLIENT_BUILD);
+        LogAd("Note: component.wow-%s.txt is an MPQ component manifest, not the WoW.exe file version.\n", langs[locale]);
     }
 
-    fprintf(output, "<componentinfo format=\"1\">\n    <component name=\"wow-%s\" version=\"%u\" />\n</componentinfo>\n", langs[locale], build);
-    fclose(output);
-    return true;
+    return EXPECTED_CLIENT_BUILD;
+}
+
+static std::string ParseComponentVersion(std::string const& text)
+{
+    size_t pos = text.find("version=\"");
+    if (pos == text.npos)
+        return "";
+
+    size_t pos1 = pos + strlen("version=\"");
+    size_t pos2 = text.find("\"", pos1);
+    if (pos2 == text.npos || pos1 >= pos2)
+        return "";
+
+    return text.substr(pos1, pos2 - pos1);
+}
+
+static std::string ReadComponentVersionFromDisk(std::string const& filename)
+{
+    std::ifstream file(filename.c_str(), std::ios::in | std::ios::binary);
+    if (!file)
+        return "";
+
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    return ParseComponentVersion(ss.str());
 }
 
 uint32 ReadMapDBC()
@@ -920,11 +1178,12 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
     return true;
 }
 
-void ExtractMapsFromMpq(uint32 build)
+uint32 ExtractMapsFromMpq(uint32 build)
 {
-    char mpq_filename[1024];
-    char output_filename[1024];
-    char mpq_map_name[1024];
+    char mpq_filename[2048];
+    char output_filename[2048];
+    char mpq_map_name[2048];
+    uint32 extractedMapFiles = 0;
 
     printf("Extracting maps...\n");
 
@@ -958,7 +1217,8 @@ void ExtractMapsFromMpq(uint32 build)
                     continue;
                 sprintf(mpq_filename, "World\\Maps\\%s\\%s_%u_%u.adt", map_ids[z].name, map_ids[z].name, x, y);
                 sprintf(output_filename, "%s/maps/%03u%02u%02u.map", output_path, map_ids[z].id, y, x);
-                ConvertADT(mpq_filename, output_filename, y, x, build);
+                if (ConvertADT(mpq_filename, output_filename, y, x, build))
+                    ++extractedMapFiles;
             }
             // draw progress bar
             printf("Processing........................%d%%\r", (100 * (y + 1)) / WDT_MAP_SIZE);
@@ -966,19 +1226,25 @@ void ExtractMapsFromMpq(uint32 build)
     }
     delete [] areas;
     delete [] map_ids;
+    printf("Extracted %u map grid files\n", extractedMapFiles);
+    g_extractSummary.mapFiles += extractedMapFiles;
+    return extractedMapFiles;
 }
 
 bool ExtractFile(char const* mpq_name, std::string const& filename)
 {
+    MPQFile m(mpq_name);
+    if (m.isEof())
+        return false;
+
     FILE* output = fopen(filename.c_str(), "wb");
     if (!output)
     {
         printf("Can't create the output file '%s'\n", filename.c_str());
         return false;
     }
-    MPQFile m(mpq_name);
-    if (!m.isEof())
-        fwrite(m.getPointer(), 1, m.getSize(), output);
+
+    fwrite(m.getPointer(), 1, m.getSize(), output);
 
     fclose(output);
     return true;
@@ -1039,21 +1305,10 @@ bool ExtractMinimizedModelFile(char const* mpq_name, std::string const& filename
     return true;
 }
 
-void ExtractDBCFiles(int locale, bool basicLocale, uint32 normalizedBuild)
+void ExtractDBCFiles(int locale, bool basicLocale)
 {
-    printf("Extracting dbc files...\n");
-
-    std::set<std::string> dbcfiles;
-
-    // get DBC file list
-    for (ArchiveSet::iterator i = gOpenArchives.begin(); i != gOpenArchives.end(); ++i)
-    {
-        vector<string> files;
-        (*i)->GetFileListTo(files);
-        for (vector<string>::iterator iter = files.begin(); iter != files.end(); ++iter)
-            if (iter->rfind(".dbc") == iter->length() - strlen(".dbc"))
-                dbcfiles.insert(*iter);
-    }
+    SetAdProgress("提取 DBC", nullptr, nullptr);
+    LogAd("Extracting dbc files...\n");
 
     std::string path = output_path;
     path += "/dbc/";
@@ -1065,28 +1320,170 @@ void ExtractDBCFiles(int locale, bool basicLocale, uint32 normalizedBuild)
         CreateDir(path);
     }
 
-    // extract Build info file
+    std::string dbcLogName = path + "dbc_extract.log";
+    FILE* dbcLog = fopen(dbcLogName.c_str(), "wb");
+    if (dbcLog)
     {
-        string mpq_name = std::string("component.wow-") + langs[locale] + ".txt";
-        string filename = path + mpq_name;
+        fprintf(dbcLog, "DBC extraction log\n");
+        fprintf(dbcLog, "==================\n");
+        fprintf(dbcLog, "Locale         : %s\n", langs[locale]);
+        fprintf(dbcLog, "Output path    : %s\n", path.c_str());
+        fprintf(dbcLog, "Archive order  : common first, locale later, patch-chain overwrite enabled\n\n");
+        fflush(dbcLog);
+    }
+    else
+        LogAd("Warning: cannot create DBC extraction log '%s'\n", dbcLogName.c_str());
 
-        WriteBuildInfoFile(filename, locale, normalizedBuild);
+    std::set<std::string> finalDbcFiles;
+    int componentCount = 0;
+    int totalWrites = 0;
+
+    // Extract in MPQ open order, not from one global resolved view. Later MPQs
+    // overwrite earlier MPQs exactly like the WoW client patch chain.
+    string componentName = std::string("component.wow-") + langs[locale] + ".txt";
+    string componentOutput = path + componentName;
+    for (ArchiveSet::reverse_iterator archive = gOpenArchives.rbegin(); archive != gOpenArchives.rend(); ++archive)
+    {
+        SetAdProgress("提取 DBC: 读取 MPQ", (*archive)->filename.c_str(), nullptr);
+        LogAd("DBC archive: %s\n", (*archive)->filename.c_str());
+        if (dbcLog)
+        {
+            fprintf(dbcLog, "[Archive] %s\n", (*archive)->filename.c_str());
+            fflush(dbcLog);
+        }
+
+        SetAdProgress("提取 DBC: component", (*archive)->filename.c_str(), componentName.c_str());
+        if ((*archive)->ExtractFileTo(componentName.c_str(), componentOutput))
+        {
+            std::string componentVersion = ReadComponentVersionFromDisk(componentOutput);
+            LogAd("Extracted component build info from %s", (*archive)->filename.c_str());
+            if (!componentVersion.empty())
+                LogAd(" (version=%s)", componentVersion.c_str());
+            LogAd("\n");
+            if (dbcLog)
+            {
+                fprintf(dbcLog, "  component: %s -> %s", componentName.c_str(), componentOutput.c_str());
+                if (!componentVersion.empty())
+                    fprintf(dbcLog, " version=%s", componentVersion.c_str());
+                fprintf(dbcLog, "\n");
+                fflush(dbcLog);
+            }
+            ++componentCount;
+        }
+
+        vector<string> files;
+        SetAdProgress("提取 DBC: 读取 listfile", (*archive)->filename.c_str(), "(listfile)");
+        (*archive)->GetFileListTo(files);
+        for (vector<string>::iterator iter = files.begin(); iter != files.end(); ++iter)
+        {
+            if (iter->length() <= strlen(".dbc") || iter->rfind(".dbc") != iter->length() - strlen(".dbc"))
+                continue;
+            if (iter->find("DBFilesClient\\") != 0)
+                continue;
+
+            string filename = path;
+            filename += (iter->c_str() + strlen("DBFilesClient\\"));
+            SetAdProgress("提取 DBC: 写入文件", (*archive)->filename.c_str(), iter->c_str());
+            if (dbcLog)
+            {
+                fprintf(dbcLog, "  try: %s\n", iter->c_str());
+                fflush(dbcLog);
+            }
+            if ((*archive)->ExtractFileTo(iter->c_str(), filename))
+            {
+                finalDbcFiles.insert(*iter);
+                ++totalWrites;
+                if (dbcLog)
+                {
+                    fprintf(dbcLog, "  write: %s -> %s\n", iter->c_str(), filename.c_str());
+                    fflush(dbcLog);
+                }
+            }
+            else if (IsRequiredServerDbc(*iter) && dbcLog)
+            {
+                fprintf(dbcLog, "  fail: %s -> %s\n", iter->c_str(), (*archive)->LastError());
+                fflush(dbcLog);
+            }
+        }
+
+        if (dbcLog)
+        {
+            fprintf(dbcLog, "\n");
+            fflush(dbcLog);
+        }
     }
 
-    // extract DBCs
-    int count = 0;
-    for (set<string>::iterator iter = dbcfiles.begin(); iter != dbcfiles.end(); ++iter)
+    if (WriteNormalizedComponentBuildInfo(componentOutput, langs[locale]))
     {
-        string filename = path;
-        filename += (iter->c_str() + strlen("DBFilesClient\\"));
-
-        if (ExtractFile(iter->c_str(), filename))
-            ++count;
+        LogAd("Wrote normalized CMaNGOS build info: %s (version=%u)\n", componentOutput.c_str(), EXPECTED_CLIENT_BUILD);
+        if (dbcLog)
+        {
+            fprintf(dbcLog, "  normalized-component: %s version=%u\n", componentOutput.c_str(), EXPECTED_CLIENT_BUILD);
+            fflush(dbcLog);
+        }
     }
-    printf("Extracted %u DBC files\n\n", count);
+    else
+        LogAd("[错误] 无法写入规范化 build 信息文件: %s\n", componentOutput.c_str());
+
+    for (char const* requiredDbc : REQUIRED_SERVER_DBC_FILES)
+    {
+        if (finalDbcFiles.find(requiredDbc) == finalDbcFiles.end())
+        {
+            LogAd("[错误] 必需 DBC 未从 MPQ listfile 成功提取: %s\n", requiredDbc);
+            if (dbcLog)
+                fprintf(dbcLog, "[Missing required] %s\n", requiredDbc);
+            ++g_missingRequiredDbc;
+        }
+    }
+
+    if (dbcLog)
+    {
+        fprintf(dbcLog, "\nSummary\n");
+        fprintf(dbcLog, "-------\n");
+        fprintf(dbcLog, "Unique DBC files     : %u\n", uint32(finalDbcFiles.size()));
+        fprintf(dbcLog, "Patch-chain writes   : %u\n", uint32(totalWrites));
+        fprintf(dbcLog, "Component writes     : %u\n", uint32(componentCount));
+        fclose(dbcLog);
+    }
+
+    LogAd("DBC detail log: %s\n", dbcLogName.c_str());
+    LogAd("Extracted %u unique DBC files with %u patch-chain writes; component writes=%u\n\n", uint32(finalDbcFiles.size()), uint32(totalWrites), uint32(componentCount));
+    g_extractSummary.dbcUnique = uint32(finalDbcFiles.size());
+    g_extractSummary.dbcWrites += uint32(totalWrites);
+    g_extractSummary.componentWrites += uint32(componentCount);
 }
 
-void ExtractCameraFiles(int locale, bool basicLocale)
+bool EnsureDBCFilesForCurrentTask(int locale)
+{
+    std::vector<std::string> required;
+    if (CONF_extract & EXTRACT_MAP)
+    {
+        required.push_back("Map.dbc");
+        required.push_back("AreaTable.dbc");
+        required.push_back("LiquidType.dbc");
+    }
+    if (CONF_extract & EXTRACT_CAMERA)
+        required.push_back("CinematicCamera.dbc");
+    if (CONF_extract & EXTRACT_MODELDATA)
+        required.push_back("CreatureModelData.dbc");
+
+    for (std::string const& dbcName : required)
+    {
+        std::string filename = output_path;
+        filename += "/dbc/";
+        filename += dbcName;
+        if (!FileExists(filename.c_str()))
+        {
+            printf("Required DBC dependency '%s' is missing; extracting DBCs first.\n", dbcName.c_str());
+            ExtractDBCFiles(locale, true);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint32 ExtractCameraFiles(int locale, bool basicLocale)
 {
     printf("Extracting camera files...\n");
     DBCFile camdbc("DBFilesClient\\CinematicCamera.dbc");
@@ -1094,7 +1491,7 @@ void ExtractCameraFiles(int locale, bool basicLocale)
     if (!camdbc.open())
     {
         printf("Unable to open CinematicCamera.dbc. Camera extract aborted.\n");
-        return;
+        return 0;
     }
 
     // get camera file list from DBC
@@ -1134,9 +1531,11 @@ void ExtractCameraFiles(int locale, bool basicLocale)
             ++count;
     }
     printf("Extracted %u camera files\n", count);
+    g_extractSummary.cameraFiles += count;
+    return count;
 }
 
-void ExtractCreatureModelFiles(int locale, bool basicLocale)
+uint32 ExtractCreatureModelFiles(int locale, bool basicLocale)
 {
     printf("Extracting Creature Model files...\n");
     DBCFile modeldbc("DBFilesClient\\CreatureModelData.dbc");
@@ -1144,7 +1543,7 @@ void ExtractCreatureModelFiles(int locale, bool basicLocale)
     if (!modeldbc.open())
     {
         printf("Unable to open CreatureModelData.dbc. Creature Model extract aborted.\n");
-        return;
+        return 0;
     }
 
     // get camera file list from DBC
@@ -1188,11 +1587,35 @@ void ExtractCreatureModelFiles(int locale, bool basicLocale)
             ++count;
     }
     printf("Extracted %u CreatureModel files\n", count);
+    g_extractSummary.creatureModelFiles += count;
+    return count;
+}
+
+void PrintExtractionSummary()
+{
+    LogAd("\nExtraction summary\n");
+    LogAd("==================\n");
+    LogAd("Output directory : %s\n", output_path);
+    if ((CONF_extract & EXTRACT_DBC) || g_extractSummary.dbcUnique || g_extractSummary.dbcWrites || g_extractSummary.componentWrites)
+    {
+        LogAd("DBC files        : %u unique files\n", g_extractSummary.dbcUnique);
+        LogAd("DBC writes       : %u patch-chain writes\n", g_extractSummary.dbcWrites);
+        LogAd("Component files  : %u writes\n", g_extractSummary.componentWrites);
+    }
+    if (CONF_extract & EXTRACT_MAP)
+        LogAd("Map grid files   : %u .map files\n", g_extractSummary.mapFiles);
+    if (CONF_extract & EXTRACT_CAMERA)
+        LogAd("Camera files     : %u files\n", g_extractSummary.cameraFiles);
+    if (CONF_extract & EXTRACT_MODELDATA)
+        LogAd("Creature models  : %u files\n", g_extractSummary.creatureModelFiles);
+    LogAd("Extraction complete.\n");
+    LogAd("Main log         : %s/ad_extract.log\n", output_path);
+    LogAd("DBC detail log   : %s/dbc/dbc_extract.log\n\n", output_path);
 }
 
 void LoadLocaleMPQFiles(int const locale, int const maxPatch = CONF_locale_patch_max)
 {
-    char filename[512];
+    char filename[2048];
     int count = sizeof(CONF_locale_mpq_list) / sizeof(char*);
     for (int i = 0; i < count; ++i)
     {
@@ -1213,13 +1636,17 @@ void LoadLocaleMPQFiles(int const locale, int const maxPatch = CONF_locale_patch
         sprintf(archiveName, CONF_locale_mpq_list[i], langs[locale], langs[locale]);
         sprintf(filename, "%s/Data/%s/%s", input_path, langs[locale], archiveName);
         if (FileExists(filename))
-            new MPQArchive(filename);
+        {
+            MPQArchive* arch = new MPQArchive(filename);
+            if (!arch->mpq_a)
+                delete arch;
+        }
     }
 }
 
 void LoadCommonMPQFiles(int const maxPatch = CONF_common_patch_max)
 {
-    char filename[512];
+    char filename[2048];
     int count = sizeof(CONF_mpq_list) / sizeof(char*);
     for (int i = 0; i < count; ++i)
     {
@@ -1238,27 +1665,21 @@ void LoadCommonMPQFiles(int const maxPatch = CONF_common_patch_max)
 
         sprintf(filename, "%s/Data/%s", input_path, CONF_mpq_list[i]);
         if (FileExists(filename))
-            new MPQArchive(filename);
+        {
+            MPQArchive* arch = new MPQArchive(filename);
+            if (!arch->mpq_a)
+                delete arch;
+        }
     }
-}
-
-bool TryPatchWindow(int locale, int localePatchMax, int commonPatchMax, uint32& buildOut)
-{
-    LoadCommonMPQFiles(commonPatchMax);
-    LoadLocaleMPQFiles(locale, localePatchMax);
-
-    buildOut = ReadBuild(locale);
-
-    DBCFile mapdbc("DBFilesClient\\Map.dbc");
-    bool ok = mapdbc.open();
-
-    CloseMPQFiles();
-    return ok;
 }
 
 inline void CloseMPQFiles()
 {
-    for (ArchiveSet::iterator j = gOpenArchives.begin(); j != gOpenArchives.end(); ++j)(*j)->close();
+    for (ArchiveSet::iterator j = gOpenArchives.begin(); j != gOpenArchives.end(); ++j)
+    {
+        (*j)->close();
+        delete *j;
+    }
     gOpenArchives.clear();
 }
 
@@ -1268,68 +1689,53 @@ int main(int argc, char* arg[])
     printf("===================\n\n");
 
     HandleArgs(argc, arg);
+    PreparePathsAfterArgs();
+    OpenAdLog();
+    std::set_terminate(AdTerminateHandler);
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(AdUnhandledExceptionFilter);
+#endif
 
     int FirstLocale = -1;
     uint32 build = 0;
-    int selectedLocalePatchMax = 4;
-    int selectedCommonPatchMax = 5;
 
     for (int i = 0; i < LANG_COUNT; i++)
     {
-        char tmp1[512];
+        char tmp1[1536];
         sprintf(tmp1, "%s/Data/%s/locale-%s.MPQ", input_path, langs[i], langs[i]);
         if (FileExists(tmp1))
         {
-            printf("Detected locale: %s\n", langs[i]);
+            SetAdProgress("检测客户端语言", nullptr, langs[i]);
+            LogAd("Detected locale: %s (reopening all MPQs for this locale)\n", langs[i]);
 
             if (FirstLocale < 0)
             {
                 FirstLocale = i;
-                bool foundCompatibleWindow = false;
-                for (int localePatch = 4; localePatch >= 1 && !foundCompatibleWindow; --localePatch)
-                {
-                    for (int commonPatch = 5; commonPatch >= 1; --commonPatch)
-                    {
-                        uint32 testBuild = 0;
-                        if (TryPatchWindow(i, localePatch, commonPatch, testBuild))
-                        {
-                            selectedLocalePatchMax = localePatch;
-                            selectedCommonPatchMax = commonPatch;
-                            build = testBuild;
-                            foundCompatibleWindow = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!foundCompatibleWindow)
-                {
-                    printf("Fatal error: no compatible patch window for Map.dbc parsing was found.\n");
-                    return 1;
-                }
-
-                printf("Detected client build: %u\n", build);
-                build = NormalizeBuildForServer(build);
-                printf("Using patch compatibility window: locale<=%d common<=%d\n", selectedLocalePatchMax, selectedCommonPatchMax);
             }
 
             // Open common first, then locale. Locale archives must have priority
             // for DBC files with localized layouts and strings.
-            LoadCommonMPQFiles(selectedCommonPatchMax);
-            LoadLocaleMPQFiles(i, selectedLocalePatchMax);
+            LoadCommonMPQFiles();
+            LoadLocaleMPQFiles(i);
+            if (FirstLocale == i)
+            {
+                build = ReadBuild(i);
+                LogAd("Detected MPQ component build: %u\n", build);
+            }
 
             if ((CONF_extract & EXTRACT_DBC) == 0)
             {
+                CloseMPQFiles();
                 break;
             }
 
             //Extract DBC files
             if (FirstLocale == i)
             {
-                ExtractDBCFiles(i, true, build);
+                ExtractDBCFiles(i, true);
             }
             else
-                ExtractDBCFiles(i, false, build);
+                ExtractDBCFiles(i, false);
 
             //Close MPQs
             CloseMPQFiles();
@@ -1338,17 +1744,19 @@ int main(int argc, char* arg[])
 
     if (FirstLocale < 0)
     {
-        printf("No locales detected\n");
-        return 0;
+        LogAd("[错误] 未检测到客户端语言目录。请确认输入目录包含 Data\\zhCN\\locale-zhCN.MPQ 等文件。\n");
+        CloseAdLog();
+        return 2;
     }
 
     if (CONF_extract & EXTRACT_CAMERA)
     {
-        printf("Using locale: %s\n", langs[FirstLocale]);
+        LogAd("Using locale: %s\n", langs[FirstLocale]);
 
-        LoadCommonMPQFiles(selectedCommonPatchMax);
-        LoadLocaleMPQFiles(FirstLocale, selectedLocalePatchMax);
+        LoadCommonMPQFiles();
+        LoadLocaleMPQFiles(FirstLocale);
 
+        EnsureDBCFilesForCurrentTask(FirstLocale);
         ExtractCameraFiles(FirstLocale, true);
         // Close MPQs
         CloseMPQFiles();
@@ -1356,11 +1764,12 @@ int main(int argc, char* arg[])
 
     if (CONF_extract & EXTRACT_MODELDATA)
     {
-        printf("Using locale: %s\n", langs[FirstLocale]);
+        LogAd("Using locale: %s\n", langs[FirstLocale]);
 
-        LoadCommonMPQFiles(selectedCommonPatchMax);
-        LoadLocaleMPQFiles(FirstLocale, selectedLocalePatchMax);
+        LoadCommonMPQFiles();
+        LoadLocaleMPQFiles(FirstLocale);
 
+        EnsureDBCFilesForCurrentTask(FirstLocale);
         ExtractCreatureModelFiles(FirstLocale, true);
         // Close MPQs
         CloseMPQFiles();
@@ -1368,11 +1777,12 @@ int main(int argc, char* arg[])
 
     if (CONF_extract & EXTRACT_MAP)
     {
-        printf("Using locale: %s\n", langs[FirstLocale]);
+        LogAd("Using locale: %s\n", langs[FirstLocale]);
 
-        LoadCommonMPQFiles(selectedCommonPatchMax);
-        LoadLocaleMPQFiles(FirstLocale, selectedLocalePatchMax);
+        LoadCommonMPQFiles();
+        LoadLocaleMPQFiles(FirstLocale);
 
+        EnsureDBCFilesForCurrentTask(FirstLocale);
         // Extract maps
         ExtractMapsFromMpq(build);
 
@@ -1380,5 +1790,29 @@ int main(int argc, char* arg[])
         CloseMPQFiles();
     }
 
+    PrintExtractionSummary();
+    bool failed = false;
+    if ((CONF_extract & EXTRACT_DBC) && g_extractSummary.dbcUnique == 0)
+    {
+        LogAd("[错误] DBC 提取没有生成任何 DBC 文件。\n");
+        failed = true;
+    }
+    if ((CONF_extract & EXTRACT_DBC) && g_missingRequiredDbc != 0)
+    {
+        LogAd("[错误] 有 %u 个必需 DBC 缺失，提取结果不可用于服务端。\n", g_missingRequiredDbc);
+        failed = true;
+    }
+    if ((CONF_extract & EXTRACT_MAP) && g_extractSummary.mapFiles == 0)
+    {
+        LogAd("[错误] 地图提取没有生成任何 .map 文件。\n");
+        failed = true;
+    }
+    if (failed)
+    {
+        LogAd("ad.exe 提取失败，请查看上面的错误和日志。\n");
+        CloseAdLog();
+        return 2;
+    }
+    CloseAdLog();
     return 0;
 }

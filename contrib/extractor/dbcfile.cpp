@@ -2,6 +2,9 @@
 
 #include "dbcfile.h"
 #include "mpq_libmpq.h"
+#include <cstdio>
+
+extern char output_path[];
 
 DBCFile::DBCFile(const std::string& filename):
     filename(filename),
@@ -11,6 +14,43 @@ DBCFile::DBCFile(const std::string& filename):
 
 bool DBCFile::open()
 {
+    std::string diskName = output_path;
+    diskName += "/dbc/";
+    size_t nameStart = filename.find_last_of("\\/");
+    diskName += (nameStart == std::string::npos ? filename : filename.substr(nameStart + 1));
+
+    if (FILE* disk = fopen(diskName.c_str(), "rb"))
+    {
+        char header[4];
+        unsigned int na, nb, es, ss;
+        if (fread(header, 1, 4, disk) == 4 &&
+            header[0] == 'W' && header[1] == 'D' && header[2] == 'B' && header[3] == 'C' &&
+            fread(&na, 4, 1, disk) == 1 &&
+            fread(&nb, 4, 1, disk) == 1 &&
+            fread(&es, 4, 1, disk) == 1 &&
+            fread(&ss, 4, 1, disk) == 1 &&
+            nb * 4 == es)
+        {
+            recordSize = es;
+            recordCount = na;
+            fieldCount = nb;
+            stringSize = ss;
+
+            size_t data_size = recordSize * recordCount + stringSize;
+            data = new unsigned char[data_size];
+            stringTable = data + recordSize * recordCount;
+            if (fread(data, 1, data_size, disk) == data_size)
+            {
+                fclose(disk);
+                return true;
+            }
+
+            delete [] data;
+            data = 0;
+        }
+        fclose(disk);
+    }
+
     MPQFile f(filename.c_str());
     char header[4];
     unsigned int na, nb, es, ss;

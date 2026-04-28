@@ -57,12 +57,20 @@ else
   fi
 fi
 
+if [ "x${CLIENT_PATH}" != "x" ] && [ "x${OUTPUT_PATH}" = "x" ]
+then
+  OUTPUT_PATH="${CLIENT_PATH}/ClientData"
+  echo "No OUTPUT_PATH provided. Using default: ${OUTPUT_PATH}"
+fi
+
 if [ "x${OUTPUT_PATH}" != "x" ]
 then
   if [ ! -d "${OUTPUT_PATH}" ]
   then
-    echo "Provided OUTPUT_PATH=${OUTPUT_PATH} does not exist, please create it before"
-    exit 1
+    mkdir -p "${OUTPUT_PATH}" || {
+      echo "Could not create OUTPUT_PATH=${OUTPUT_PATH}"
+      exit 1
+    }
   fi
   LOG_FILE="${OUTPUT_PATH:-.}/${LOG_FILE}"
   DETAIL_LOG_FILE="${OUTPUT_PATH:-.}/${DETAIL_LOG_FILE}"
@@ -281,7 +289,7 @@ then
    mkdir "${OUTPUT_PATH:-.}/vmaps"
  fi
  echo "$(date): Start extraction of model files..." | tee -a $LOG_FILE
- $PREFIX/ad -e 8 | tee -a $DETAIL_LOG_FILE
+ $PREFIX/ad -e 8 $AD_OPT_RES | tee -a $DETAIL_LOG_FILE
  echo "$(date): Extracting of model files finished" | tee -a $LOG_FILE
  echo | tee -a $LOG_FILE
  echo | tee -a $DETAIL_LOG_FILE

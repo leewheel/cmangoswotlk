@@ -36,8 +36,17 @@ int main(int argc, char* argv[])
     else if (argc != 1)
     {
         std::cout << "usage: " << argv[0] << " [<raw data dir> <vmap dest dir>]" << std::endl;
-        std::cout << "default: " << argv[0] << " (uses Buildings -> vmaps)" << std::endl; // 默认目录提取，不必加参数
+        std::cout << "default: " << argv[0] << " (auto: ClientData/Buildings -> ClientData/vmaps, fallback Buildings -> vmaps)" << std::endl;
         return 1;
+    }
+    else
+    {
+        std::error_code stErr;
+        if (std::filesystem::exists("ClientData/Buildings/dir_bin", stErr))
+        {
+            src = "ClientData/Buildings";
+            dest = "ClientData/vmaps";
+        }
     }
 
     std::error_code ec;

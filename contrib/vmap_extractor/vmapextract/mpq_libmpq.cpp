@@ -1,10 +1,13 @@
 #include "mpq_libmpq04.h"
 #include <deque>
 #include <cstdio>
+#include <string>
 
 ArchiveSet gOpenArchives;
 
 MPQArchive::MPQArchive(const char* filename)
+    : mpq_a(nullptr),
+      filename(filename)
 {
     int result = libmpq__archive_open(&mpq_a, filename, -1);
     printf("Opening %s\n", filename);
@@ -36,10 +39,59 @@ MPQArchive::MPQArchive(const char* filename)
     gOpenArchives.push_front(this);
 }
 
+MPQArchive::~MPQArchive()
+{
+    close();
+}
+
 void MPQArchive::close()
 {
-    //gOpenArchives.erase(erase(&mpq_a);
-    libmpq__archive_close(mpq_a);
+    if (!mpq_a)
+        return;
+    mpq_archive_s* a = mpq_a;
+    mpq_a = nullptr;
+    if (libmpq__archive_close(a) != 0)
+        mpq_a = a;
+}
+
+void MPQArchive::GetFileListTo(vector<string>& filelist)
+{
+    if (!mpq_a)
+        return;
+
+    uint32 filenum;
+    if (libmpq__file_number(mpq_a, "(listfile)", &filenum))
+        return;
+
+    libmpq__off_t size, transferred;
+    if (libmpq__file_unpacked_size(mpq_a, filenum, &size) != 0 || size <= 0)
+        return;
+
+    char* buffer = new char[size];
+    if (libmpq__file_read(mpq_a, filenum, (unsigned char*)buffer, size, &transferred) != 0 || transferred != size)
+    {
+        delete[] buffer;
+        return;
+    }
+
+    std::string content(buffer, static_cast<size_t>(size));
+    delete[] buffer;
+
+    size_t start = 0;
+    while (start < content.size())
+    {
+        size_t end = content.find('\n', start);
+        if (end == std::string::npos)
+            end = content.size();
+
+        std::string line = content.substr(start, end - start);
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+            line.pop_back();
+        if (!line.empty())
+            filelist.push_back(line);
+
+        start = end + 1;
+    }
 }
 
 MPQFile::MPQFile(const char* filename):
@@ -51,6 +103,8 @@ MPQFile::MPQFile(const char* filename):
     for (ArchiveSet::iterator i = gOpenArchives.begin(); i != gOpenArchives.end(); ++i)
     {
         mpq_archive* mpq_a = (*i)->mpq_a;
+        if (!mpq_a)
+            continue;
 
         uint32 filenum;
         if (libmpq__file_number(mpq_a, filename, &filenum)) continue;

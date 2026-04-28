@@ -41,6 +41,9 @@ include_directories(
 add_executable(${EXECUTABLE_NAME} ${AD_SOURCE})
 
 target_link_libraries(${EXECUTABLE_NAME} mpqlib)
+if(MSVC)
+  target_compile_options(${EXECUTABLE_NAME} PRIVATE /utf-8)
+endif()
 
 if(MSVC)
   # Define OutDir to source/bin/(platform)_(configuaration) folder.

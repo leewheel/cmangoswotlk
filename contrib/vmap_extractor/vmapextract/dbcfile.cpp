@@ -22,6 +22,9 @@
 #undef max
 
 #include <cstdio>
+#include <cstring>
+
+extern char output_path[];
 
 DBCFile::DBCFile(const std::string& filename) : filename(filename)
 {
@@ -30,6 +33,53 @@ DBCFile::DBCFile(const std::string& filename) : filename(filename)
 
 bool DBCFile::open()
 {
+    std::string diskName = output_path;
+    diskName += "/dbc/";
+    size_t nameStart = filename.find_last_of("\\/");
+    diskName += (nameStart == std::string::npos ? filename : filename.substr(nameStart + 1));
+
+    if (FILE* disk = fopen(diskName.c_str(), "rb"))
+    {
+        fseek(disk, 0, SEEK_END);
+        long fileSize = ftell(disk);
+        fseek(disk, 0, SEEK_SET);
+
+        if (fileSize >= 20)
+        {
+            unsigned char header[4];
+            unsigned int na, nb, es, ss;
+            if (fread(header, 1, 4, disk) == 4 &&
+                header[0] == 'W' && header[1] == 'D' && header[2] == 'B' && header[3] == 'C' &&
+                fread(&na, 4, 1, disk) == 1 &&
+                fread(&nb, 4, 1, disk) == 1 &&
+                fread(&es, 4, 1, disk) == 1 &&
+                fread(&ss, 4, 1, disk) == 1)
+            {
+                size_t payloadSize = size_t(es) * size_t(na) + size_t(ss);
+                if (payloadSize <= size_t(fileSize - 20))
+                {
+                    recordSize = es;
+                    recordCount = na;
+                    fieldCount = nb;
+                    stringSize = ss;
+
+                    data = new unsigned char[payloadSize];
+                    stringTable = data + recordSize * recordCount;
+                    if (fread(data, 1, payloadSize, disk) == payloadSize)
+                    {
+                        fclose(disk);
+                        return true;
+                    }
+
+                    delete [] data;
+                    data = NULL;
+                }
+            }
+        }
+
+        fclose(disk);
+    }
+
     MPQFile f(filename.c_str());
 
     // Need some error checking, otherwise an unhandled exception error occurs

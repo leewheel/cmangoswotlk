@@ -89,9 +89,9 @@ createHeader()
 }
 
 # Create mmaps directory if not exist
-if [ ! -d mmaps ]
+if [ ! -d "${OUTPUT_PATH:-.}/mmaps" ]
 then
- mkdir "${OUTPUT_PATH:-.}/mmaps"
+ mkdir -p "${OUTPUT_PATH:-.}/mmaps"
 fi
 
 # Param control

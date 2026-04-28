@@ -73,8 +73,8 @@ bool hasInputPathParam = false;
 bool hasOutputPathParam = false;
 bool preciseVectorData = false;
 std::unordered_map<std::string, WMODoodadData> WmoDoodads;
-int CONF_locale_patch_max = 99;
-int CONF_common_patch_max = 99;
+int CONF_locale_patch_max = 5;
+int CONF_common_patch_max = 5;
 
 // Constants
 
@@ -341,6 +341,81 @@ void getGamePath()
 #endif
 }
 
+static void NormalizePathsAfterArgs()
+{
+    if (!hasInputPathParam)
+        getGamePath();
+
+    std::error_code ec;
+    std::filesystem::path inPath(input_path);
+    std::filesystem::path absInPath = std::filesystem::absolute(inPath, ec);
+    if (ec)
+    {
+        printf("FATAL ERROR: Invalid input path '%s': %s\n", input_path, ec.message().c_str());
+        exit(1);
+    }
+    std::string absIn = absInPath.lexically_normal().string();
+    if (!absIn.empty() && absIn.size() < sizeof(input_path))
+    {
+        snprintf(input_path, sizeof(input_path), "%s", absIn.c_str());
+        if (input_path[strlen(input_path) - 1] != '\\' && input_path[strlen(input_path) - 1] != '/')
+            strncat(input_path, "/", sizeof(input_path) - strlen(input_path) - 1);
+    }
+
+    if (!hasOutputPathParam)
+    {
+        std::filesystem::path dataPath(input_path);
+        dataPath = dataPath.lexically_normal();
+        if (dataPath.filename().empty())
+            dataPath = dataPath.parent_path();
+
+        std::filesystem::path rootPath = dataPath;
+        std::string leaf = dataPath.filename().string();
+        for (char& c : leaf)
+            c = char(tolower(static_cast<unsigned char>(c)));
+        if (leaf == "data")
+            rootPath = dataPath.parent_path();
+
+        std::filesystem::path defaultOut = (rootPath / "ClientData").lexically_normal();
+        std::string defaultOutStr = defaultOut.string();
+        if (defaultOutStr.empty() || defaultOutStr.size() >= sizeof(output_path))
+        {
+            printf("FATAL ERROR: Default output path is invalid or too long.\n");
+            exit(1);
+        }
+        snprintf(output_path, sizeof(output_path), "%s", defaultOutStr.c_str());
+        printf("未指定 -o，默认输出到: %s\n", output_path);
+    }
+
+    std::filesystem::path outPath(output_path);
+    std::filesystem::path absOutPath = std::filesystem::absolute(outPath, ec);
+    if (ec)
+    {
+        printf("FATAL ERROR: Invalid output path '%s': %s\n", output_path, ec.message().c_str());
+        exit(1);
+    }
+    std::string absOut = absOutPath.lexically_normal().string();
+    if (absOut.empty() || absOut.size() >= sizeof(output_path))
+    {
+        printf("FATAL ERROR: Output path is invalid or too long.\n");
+        exit(1);
+    }
+    snprintf(output_path, sizeof(output_path), "%s", absOut.c_str());
+    if (output_path[strlen(output_path) - 1] != '\\' && output_path[strlen(output_path) - 1] != '/')
+        strncat(output_path, "/", sizeof(output_path) - strlen(output_path) - 1);
+
+    snprintf(szWorkDirWmo, sizeof(szWorkDirWmo), "%s/Buildings", output_path);
+    std::error_code mkErr;
+    std::filesystem::create_directories(szWorkDirWmo, mkErr);
+    if (mkErr)
+    {
+        printf("FATAL ERROR: Could not create output directory '%s': %s\n", szWorkDirWmo, mkErr.message().c_str());
+        exit(1);
+    }
+    printf("输出目录: %s\n", output_path);
+    printf("目录规则: ClientData/Buildings 为 vmap 原始数据，ClientData/vmaps 为组装结果。\n");
+}
+
 bool scan_patches(char* scanmatch, std::vector<std::string>& pArchiveNames, int maxPatch)
 {
     int i;
@@ -369,9 +444,6 @@ bool scan_patches(char* scanmatch, std::vector<std::string>& pArchiveNames, int 
 
 bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
 {
-    if (!hasInputPathParam)
-        getGamePath();
-
     printf("\nGame path: %s\n", input_path);
 
     char path[path_l + 512];
@@ -405,16 +477,8 @@ bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
     }
     printf("\n");
 
-    // open locale expansion and common files
-    printf("Adding data files from locale directories.\n");
-    for (std::vector<std::string>::iterator i = locales.begin(); i != locales.end(); ++i)
-    {
-        pArchiveNames.push_back(in_path + *i + "/locale-" + *i + ".MPQ");
-        pArchiveNames.push_back(in_path + *i + "/expansion-locale-" + *i + ".MPQ");
-        pArchiveNames.push_back(in_path + *i + "/lichking-locale-" + *i + ".MPQ");
-    }
-
-    // open expansion and common files
+    // Open common files first so locale files opened later can override.
+    printf("Adding data files from common directory.\n");
     pArchiveNames.push_back(input_path + string("common.MPQ"));
     pArchiveNames.push_back(input_path + string("common-2.MPQ"));
     pArchiveNames.push_back(input_path + string("expansion.MPQ"));
@@ -431,6 +495,20 @@ bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
         
     if (!scan_patches(path, pArchiveNames, CONF_common_patch_max))
         return (false);
+
+    // Add locale file chain after common files.
+    printf("Adding data files from locale directories.\n");
+    for (std::vector<std::string>::iterator i = locales.begin(); i != locales.end(); ++i)
+    {
+        pArchiveNames.push_back(in_path + *i + "/base-" + *i + ".MPQ");
+        pArchiveNames.push_back(in_path + *i + "/backup-" + *i + ".MPQ");
+        pArchiveNames.push_back(in_path + *i + "/locale-" + *i + ".MPQ");
+        pArchiveNames.push_back(in_path + *i + "/speech-" + *i + ".MPQ");
+        pArchiveNames.push_back(in_path + *i + "/expansion-locale-" + *i + ".MPQ");
+        pArchiveNames.push_back(in_path + *i + "/expansion-speech-" + *i + ".MPQ");
+        pArchiveNames.push_back(in_path + *i + "/lichking-locale-" + *i + ".MPQ");
+        pArchiveNames.push_back(in_path + *i + "/lichking-speech-" + *i + ".MPQ");
+    }
 
     // now, scan for the patch levels in locale dirs
     printf("Scanning patch levels from locale directories.\n");
@@ -480,22 +558,21 @@ bool OpenArchivesWithPatchWindow(int localePatchMax, int commonPatchMax)
     for (size_t i = 0; i < archiveNames.size(); ++i)
     {
         MPQArchive* archive = new MPQArchive(archiveNames[i].c_str());
-        if (!gOpenArchives.size() || gOpenArchives.front() != archive)
+        if (!archive->mpq_a)
             delete archive;
     }
 
     if (gOpenArchives.empty())
         return false;
 
-    DBCFile mapdbc("DBFilesClient\\Map.dbc");
-    DBCFile liqdbc("DBFilesClient\\LiquidType.dbc");
-    return mapdbc.open() && liqdbc.open();
+    return true;
 }
 
 bool processArgv(int argc, char** argv)
 {
     bool result = true;
     hasInputPathParam = false;
+    hasOutputPathParam = false;
     preciseVectorData = false;
     sprintf(szWorkDirWmo, "%s", "./Buildings");
 
@@ -536,7 +613,7 @@ bool processArgv(int argc, char** argv)
                 result = false;
             }
         }
-        else if (strcmp("-?", argv[1]) == 0)
+        else if (strcmp("-?", argv[i]) == 0)
         {
             result = false;
         }
@@ -552,13 +629,13 @@ bool processArgv(int argc, char** argv)
     }
     if (!result)
     {
-        printf("Extract for %s.\n", szRawVMAPMagic);
+        printf("提取 %s。\n", szRawVMAPMagic);
         printf("%s [-?][-s][-l][-d <path>]\n", argv[0]);
-        printf("   -s : (default) small size (data size optimization), ~500MB less vmap data.\n");
-        printf("   -l : large size, ~500MB more vmap data. (might contain more details)\n");
-        printf("   -d <path>: Path to the vector data source folder.\n");
-        printf("   -o <path>: Path to the output folder.\n");
-        printf("   -? : This message.\n");
+        printf("   -s : 默认，小尺寸数据，约减少 500MB vmap 数据。\n");
+        printf("   -l : 大尺寸数据，约增加 500MB vmap 数据，细节更多。\n");
+        printf("   -d <path>: 客户端 Data 目录，通常为 <WoW>/Data。\n");
+        printf("   -o <path>: 输出目录，默认 <WoW>/ClientData。\n");
+        printf("   -? : 显示本帮助。\n");
     }
     return result;
 }
@@ -580,9 +657,9 @@ int main(int argc, char** argv)
     // Use command line arguments, when some
     if (!processArgv(argc, argv))
         return 1;
+    NormalizePathsAfterArgs();
 
     // some simple check if working dir is dirty
-    else
     {
         std::string sdir = std::string(szWorkDirWmo) + "/dir";
         std::string sdir_bin = std::string(szWorkDirWmo) + "/dir_bin";
@@ -595,43 +672,13 @@ int main(int argc, char** argv)
         }
     }
 
-    printf("Extract for %s. Beginning work ....\n", szRawVMAPMagic);
-    //xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    // Create the working directory. Some custom client paths contain spaces
-    // and mixed separators, so use the standard filesystem API here.
-    std::error_code dirError;
-    std::filesystem::create_directories(szWorkDirWmo, dirError);
-    if (dirError)
-    {
-        printf("ERROR: Could not create output directory '%s': %s\n", szWorkDirWmo, dirError.message().c_str());
-        return 1;
-    }
-
-    bool foundCompatibleWindow = false;
-    int selectedLocalePatch = 99;
-    int selectedCommonPatch = 99;
-    for (int localePatch = 6; localePatch >= 1 && !foundCompatibleWindow; --localePatch)
-    {
-        for (int commonPatch = 6; commonPatch >= 1; --commonPatch)
-        {
-            if (OpenArchivesWithPatchWindow(localePatch, commonPatch))
-            {
-                selectedLocalePatch = localePatch;
-                selectedCommonPatch = commonPatch;
-                foundCompatibleWindow = true;
-                break;
-            }
-
-            CloseMPQArchives();
-        }
-    }
-
-    if (!foundCompatibleWindow || gOpenArchives.empty())
+    printf("开始提取 %s...\n", szRawVMAPMagic);
+    if (!OpenArchivesWithPatchWindow(CONF_locale_patch_max, CONF_common_patch_max) || gOpenArchives.empty())
     {
         printf("FATAL ERROR: None MPQ archive found by path '%s'. Use -d option with proper path.\n", input_path);
         return 1;
     }
-    printf("Using patch compatibility window: locale<=%d common<=%d\n", selectedLocalePatch, selectedCommonPatch);
+    printf("Using patch chain limits: locale<=%d common<=%d\n", CONF_locale_patch_max, CONF_common_patch_max);
     ReadLiquidTypeTableDBC();
 
     // extract data
