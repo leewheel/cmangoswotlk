@@ -48,6 +48,9 @@
 #include "Entities/CreatureLinkingMgr.h"
 #include "Entities/Transports.h"
 #include "Maps/SpawnManager.h"
+#ifdef BUILD_ELUNA
+#include "LuaEngine/LuaEngine.h"
+#endif
 
 // apply implementation of the singletons
 #include "Policies/Singleton.h"
@@ -173,6 +176,10 @@ void Creature::AddToWorld()
     ///- Register the creature for guid lookup
     if (!IsInWorld())
     {
+#ifdef BUILD_ELUNA
+        if (Eluna* e = GetEluna())
+            e->OnAddToWorld(this);
+#endif
         if (GetObjectGuid().IsCreatureOrVehicle())
             GetMap()->GetObjectsStore().insert<Creature>(GetObjectGuid(), (Creature*)this);
         if (GetDbGuid())
@@ -212,6 +219,10 @@ void Creature::RemoveFromWorld()
     ///- Remove the creature from the accessor
     if (IsInWorld())
     {
+#ifdef BUILD_ELUNA
+        if (Eluna* e = GetEluna())
+            e->OnRemoveFromWorld(this);
+#endif
         if (GetObjectGuid().IsCreatureOrVehicle())
             GetMap()->GetObjectsStore().erase<Creature>(GetObjectGuid(), (Creature*)nullptr);
         if (GetDbGuid())
@@ -924,6 +935,37 @@ void Creature::RegenerateHealth()
     uint32 addvalue = IsPlayerControlled() ? maxValue * 0.13 : maxValue / 3;
 
     ModifyHealth(addvalue);
+}
+
+void Creature::DoFleeToGetAssistance()
+{
+    if (!GetVictim())
+    {
+        return;
+    }
+
+    float radius = sWorld.getConfig(CONFIG_FLOAT_CREATURE_FAMILY_FLEE_ASSISTANCE_RADIUS);
+    if (radius > 0)
+    {
+        Creature* pCreature = NULL;
+
+        MaNGOS::NearestAssistCreatureInCreatureRangeCheck u_check(this, GetVictim(), radius);
+        MaNGOS::CreatureLastSearcher<MaNGOS::NearestAssistCreatureInCreatureRangeCheck> searcher(pCreature, u_check);
+        Cell::VisitGridObjects(this, searcher, radius);
+
+        SetNoSearchAssistance(true);
+        UpdateSpeed(MOVE_RUN, false);
+
+        if (!pCreature)
+        {
+            SetFleeing(true, GetVictim()->GetObjectGuid(), 0, sWorld.getConfig(CONFIG_UINT32_CREATURE_FAMILY_FLEE_DELAY));
+        }
+        else
+        {
+            SetTargetGuid(ObjectGuid());        // creature flee loose its target
+            GetMotionMaster()->MoveFollow(pCreature, PET_FOLLOW_DIST, PET_FOLLOW_ANGLE);
+        }
+    }
 }
 
 bool Creature::AIM_Initialize()
@@ -2623,6 +2665,36 @@ void Creature::UpdateImmunitiesSet(uint32 immunitySet)
         ApplySpellImmune(nullptr, data.type, data.value, true);
 
     m_immunitySet = immunitySet;
+}
+
+bool Creature::HasCategoryCooldown(uint32 spell_id) const
+{
+    SpellEntry const* spellInfo = sSpellTemplate.LookupEntry<SpellEntry>(spell_id);
+    if (!spellInfo)
+    {
+        return false;
+    }
+
+    CreatureSpellCooldowns::const_iterator itr = m_CreatureCategoryCooldowns.find(spellInfo->Category);
+    return (itr != m_CreatureCategoryCooldowns.end() && time_t(itr->second + (spellInfo->CategoryRecoveryTime / IN_MILLISECONDS)) > time(NULL));
+}
+
+uint32 Creature::GetCreatureSpellCooldownDelay(uint32 spellId) const
+{
+    CreatureSpellCooldowns::const_iterator itr = m_CreatureSpellCooldowns.find(spellId);
+    time_t t = time(NULL);
+    return uint32(itr != m_CreatureSpellCooldowns.end() && itr->second > t ? itr->second - t : 0);
+}
+
+bool Creature::HasSpellCooldown(uint32 spell_id) const
+{
+    CreatureSpellCooldowns::const_iterator itr = m_CreatureSpellCooldowns.find(spell_id);
+    return (itr != m_CreatureSpellCooldowns.end() && itr->second > time(NULL)) || HasCategoryCooldown(spell_id);
+}
+
+bool Creature::IsInEvadeMode() const
+{
+    return !i_motionMaster.empty() && i_motionMaster.GetCurrentMovementGeneratorType() == HOME_MOTION_TYPE;
 }
 
 time_t Creature::GetRespawnTimeEx() const

@@ -40,6 +40,47 @@ if(NOT BUILD_SCRIPTDEV)
   endforeach()
 endif()
 
+if(NOT BUILD_ELUNA)
+  # exclude Eluna LUA Engine
+  set (EXCLUDE_DIR "LuaEngine/")
+  foreach (TMP_PATH ${LIBRARY_SRCS})
+      string (FIND ${TMP_PATH} ${EXCLUDE_DIR} EXCLUDE_DIR_FOUND)
+      if (NOT ${EXCLUDE_DIR_FOUND} EQUAL -1)
+          list(REMOVE_ITEM LIBRARY_SRCS ${TMP_PATH})
+      endif ()
+  endforeach()
+else()
+  # Exclude other cores
+  set (EXCLUDE_DIR "LuaEngine/methods/Mangos/")
+  foreach (TMP_PATH ${LIBRARY_SRCS})
+      string (FIND ${TMP_PATH} ${EXCLUDE_DIR} EXCLUDE_DIR_FOUND)
+      if (NOT ${EXCLUDE_DIR_FOUND} EQUAL -1)
+          list(REMOVE_ITEM LIBRARY_SRCS ${TMP_PATH})
+      endif ()
+  endforeach()
+  set (EXCLUDE_DIR "LuaEngine/methods/VMangos/")
+  foreach (TMP_PATH ${LIBRARY_SRCS})
+      string (FIND ${TMP_PATH} ${EXCLUDE_DIR} EXCLUDE_DIR_FOUND)
+      if (NOT ${EXCLUDE_DIR_FOUND} EQUAL -1)
+          list(REMOVE_ITEM LIBRARY_SRCS ${TMP_PATH})
+      endif ()
+  endforeach()
+  set (EXCLUDE_DIR "LuaEngine/methods/TrinityCore/")
+  foreach (TMP_PATH ${LIBRARY_SRCS})
+      string (FIND ${TMP_PATH} ${EXCLUDE_DIR} EXCLUDE_DIR_FOUND)
+      if (NOT ${EXCLUDE_DIR_FOUND} EQUAL -1)
+          list(REMOVE_ITEM LIBRARY_SRCS ${TMP_PATH})
+      endif ()
+  endforeach()
+  set (EXCLUDE_DIR "LuaEngine/methods/AzerothCore/")
+  foreach (TMP_PATH ${LIBRARY_SRCS})
+      string (FIND ${TMP_PATH} ${EXCLUDE_DIR} EXCLUDE_DIR_FOUND)
+      if (NOT ${EXCLUDE_DIR_FOUND} EQUAL -1)
+          list(REMOVE_ITEM LIBRARY_SRCS ${TMP_PATH})
+      endif ()
+  endforeach()
+endif()
+
 if(NOT BUILD_DEPRECATED_PLAYERBOT)
   # exclude Playerbot folder
   set (EXCLUDE_DIR "PlayerBot/")
@@ -94,6 +135,13 @@ target_link_libraries(${LIBRARY_NAME}
   PRIVATE zlib
   cmangos-compile-option-interface
 )
+
+# llama.cpp integration for LLM chat
+if(BUILD_CHATLLM)
+  target_link_libraries(${LIBRARY_NAME} PRIVATE llama llama-common)
+  target_include_directories(${LIBRARY_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/dep/llama.cpp/include)
+  add_definitions(-DBUILD_CHATLLM)
+endif()
 
 # TO DO: Remove this if when old playerbots get removed
 if(NOT BUILD_PLAYERBOTS)

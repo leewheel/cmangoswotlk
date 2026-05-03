@@ -21,6 +21,7 @@
 /// \file
 
 #include "Common.h"
+#include "Obfuscator.h"
 #include "Database/DatabaseEnv.h"
 #include "Config/Config.h"
 #include "Util/ProgressBar.h"
@@ -68,6 +69,15 @@ uint32 realmID;                                             ///< Id of the realm
 /// Launch the mangos server
 int main(int argc, char* argv[])
 {
+#ifdef _WIN32
+    // Anti-debug: terminate if debugger attached
+    if (IsDebuggerPresent())
+    {
+        MessageBoxA(nullptr, OBFUSCATE_CSTR("Debugger"), OBFUSCATE_CSTR("Error"), MB_OK);
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
+#endif
+
     std::string auctionBotConfig, configFile, playerBotConfig, serviceParameter;
 
     boost::program_options::options_description desc("Allowed options");
@@ -178,6 +188,9 @@ int main(int argc, char* argv[])
     sLog.outString("Built for %s", _ENDIAN_PLATFORM);
     sLog.outString("Using commit hash(%s) committed on %s", REVISION_ID, REVISION_DATE);
     sLog.outString("Using configuration file %s.", configFile.c_str());
+    sLog.SetColor(true, GREEN);
+    sLog.outString("%s %s %s", OBFUSCATE("Eluna Repack By Leewheel >> Build:").c_str(), __DATE__, __TIME__);
+    sLog.ResetColor(true);
 
     DETAIL_LOG("%s (Library: %s)", OPENSSL_VERSION_TEXT, OpenSSL_version(OPENSSL_VERSION));
     // Load OpenSSL 3.0+ providers
@@ -205,7 +218,7 @@ int main(int argc, char* argv[])
     sLog.outString("<Ctrl-C> to stop.");
 
     ///- Set progress bars show mode
-    BarGoLink::SetOutputState(sConfig.GetBoolDefault("ShowProgressBars", false));
+    BarGoLink::SetOutputState(sConfig.GetBoolDefault("ShowProgressBars", true));
 
     ///- and run the 'Master'
     /// \todo Why do we need this 'Master'? Can't all of this be in the Main as for Realmd?

@@ -43,6 +43,11 @@ add_executable(${EXECUTABLE_NAME}
   ${EXECUTABLE_SRCS}
 )
 
+# Anti-decompile: strip debug symbols from Release
+set_target_properties(${EXECUTABLE_NAME} PROPERTIES
+  LINK_FLAGS_RELEASE "/DEBUG:NONE"
+)
+
 target_link_libraries(${EXECUTABLE_NAME}
   shared
   cmangos-compile-option-interface
@@ -92,5 +97,5 @@ install(TARGETS ${EXECUTABLE_NAME} DESTINATION ${BIN_DIR})
 install(FILES realmd.conf.dist.in DESTINATION ${CONF_DIR} RENAME realmd.conf.dist)
 
 if(MSVC)
-  install(FILES $<TARGET_PDB_FILE:${EXECUTABLE_NAME}> DESTINATION ${BIN_DIR} CONFIGURATIONS Debug)
+  install(FILES $<TARGET_PDB_FILE:${EXECUTABLE_NAME}> DESTINATION ${BIN_DIR} CONFIGURATIONS Debug RelWithDebInfo)
 endif()

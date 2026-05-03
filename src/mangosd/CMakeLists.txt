@@ -52,6 +52,11 @@ add_executable(${EXECUTABLE_NAME}
   ${EXECUTABLE_SRCS}
 )
 
+# Anti-decompile: strip debug symbols from Release
+set_target_properties(${EXECUTABLE_NAME} PROPERTIES
+  LINK_FLAGS_RELEASE "/DEBUG:NONE"
+)
+
 target_link_libraries(${EXECUTABLE_NAME}
   shared
   game
@@ -100,6 +105,14 @@ if(WIN32)
     add_custom_command(TARGET ${EXECUTABLE_NAME} POST_BUILD
 	  COMMAND ${CMAKE_COMMAND} -E copy_if_different \"${CMAKE_SOURCE_DIR}/src/game/AuctionHouseBot/ahbot.conf.dist.in\" \"$<TARGET_FILE_DIR:${EXECUTABLE_NAME}>/ahbot.conf.dist\")
   endif()
+
+  if(BUILD_ELUNA)
+    add_custom_command(TARGET ${EXECUTABLE_NAME} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/game/LuaEngine/extensions/ $<TARGET_FILE_DIR:${EXECUTABLE_NAME}>/lua_scripts/extensions)
+
+    add_custom_command(TARGET ${EXECUTABLE_NAME} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different \"${CMAKE_SOURCE_DIR}/contrib/lua_scripts/masterscript.lua\" \"$<TARGET_FILE_DIR:${EXECUTABLE_NAME}>/lua_scripts/masterscript.lua\")
+  endif()
 endif()
 
 set(EXECUTABLE_LINK_FLAGS "")
@@ -135,8 +148,14 @@ if (BUILD_AHBOT)
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ahbot.conf.dist DESTINATION ${CONF_DIR})
 endif()
 
+# Define BUILD_ELUNA if needed
+if (BUILD_ELUNA)
+  install(FILES ${CMAKE_SOURCE_DIR}/contrib/lua_scripts/masterscript.lua DESTINATION ${BIN_DIR}/lua_scripts)
+  install(DIRECTORY ${CMAKE_SOURCE_DIR}/src/game/LuaEngine/extensions DESTINATION ${BIN_DIR}/lua_scripts)
+endif()
+
 if(MSVC)
-  install(FILES $<TARGET_PDB_FILE:${EXECUTABLE_NAME}> DESTINATION ${BIN_DIR} CONFIGURATIONS Debug)
+  install(FILES $<TARGET_PDB_FILE:${EXECUTABLE_NAME}> DESTINATION ${BIN_DIR} CONFIGURATIONS Debug RelWithDebInfo)
 endif()
 
 install(FILES ${CMAKE_SOURCE_DIR}/src/game/Anticheat/module/anticheat.conf.dist.in DESTINATION ${CONF_DIR} RENAME anticheat.conf.dist)

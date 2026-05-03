@@ -21,6 +21,7 @@
 /// \file
 
 #include "Common.h"
+#include "Obfuscator.h"
 #include "Database/DatabaseEnv.h"
 #include "RealmList.h"
 
@@ -77,6 +78,14 @@ boost::asio::io_context context;
 // Launch the realm server
 int main(int argc, char* argv[])
 {
+#ifdef _WIN32
+    if (IsDebuggerPresent())
+    {
+        MessageBoxA(nullptr, OBFUSCATE_CSTR("Debugger"), OBFUSCATE_CSTR("Error"), MB_OK);
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
+#endif
+
     std::string configFile, serviceParameter;
 
     boost::program_options::options_description desc("Allowed options");
@@ -163,6 +172,9 @@ int main(int argc, char* argv[])
     sLog.outString("Built for %s", _ENDIAN_PLATFORM);
     sLog.outString("Using commit hash(%s) committed on %s", REVISION_ID, REVISION_DATE);
     sLog.outString("Using configuration file %s.", configFile.c_str());
+    sLog.SetColor(true, GREEN);
+    sLog.outString("%s %s %s", OBFUSCATE("Eluna Repack By Leewheel >> Build:").c_str(), __DATE__, __TIME__);
+    sLog.ResetColor(true);
 
     // Check the version of the configuration file
     uint32 confVersion = sConfig.GetIntDefault("ConfVersion", 0);

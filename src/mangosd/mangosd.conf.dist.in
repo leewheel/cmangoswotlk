@@ -81,12 +81,12 @@ ConfVersion=2024020101
 ###################################################################################################################
 
 RealmID = 1
-DataDir = "."
-LogsDir = ""
-LoginDatabaseInfo     = "127.0.0.1;3306;mangos;mangos;wotlkrealmd"
-WorldDatabaseInfo     = "127.0.0.1;3306;mangos;mangos;wotlkmangos"
-CharacterDatabaseInfo = "127.0.0.1;3306;mangos;mangos;wotlkcharacters"
-LogsDatabaseInfo      = "127.0.0.1;3306;mangos;mangos;wotlklogs"
+DataDir = "ClientData"
+LogsDir = "Logs"
+LoginDatabaseInfo     = "127.0.0.1;3316;mangos;mangos;wotlkrealmd"
+WorldDatabaseInfo     = "127.0.0.1;3316;mangos;mangos;wotlkmangos"
+CharacterDatabaseInfo = "127.0.0.1;3316;mangos;mangos;wotlkcharacters"
+LogsDatabaseInfo      = "127.0.0.1;3316;mangos;mangos;wotlklogs"
 LoginDatabaseConnections = 1
 WorldDatabaseConnections = 1
 CharacterDatabaseConnections = 1
@@ -2025,3 +2025,25 @@ Metric.Password = ""
 
 Dummy.Debug1 = 0
 Dummy.Debug2 = 0
+
+###################################################################################################################
+# ChatLLM - 基于 llama.cpp 的 AI 聊天功能（NPC 和机器人）
+#
+#   模型文件(.gguf)放在 mangosd.exe 同目录下的 ChatMod/ 目录
+#   数据库表: chat_llm_personality 预设 NPC/机器人 性格模板
+#   给 NPC 设置 AI: INSERT INTO chat_llm_npc (creature_entry, personality_id, enabled) VALUES (creature模板ID, 性格ID, 1)
+#   给机器人设置 AI: INSERT INTO chat_llm_bot (guid, personality_id, enabled) VALUES (角色GUID, 性格ID, 1)
+#
+#   GPU 参数（已内置 Vulkan 支持，系统自带 vulkan-1.dll，无需额外安装）:
+#     GPULayers = 0  → 纯 CPU 推理（默认）
+#     GPULayers = 99 → 全部层 GPU 加速（需显卡驱动支持 Vulkan）
+###################################################################################################################
+
+ChatLLM.Enabled         = 0
+ChatLLM.ModelPath       = "ChatMod/Gemma-4-E4B-Claude-Abliterated.Q4_K_M.gguf"
+ChatLLM.NumThreads      = 4
+ChatLLM.GPULayers       = 0
+ChatLLM.MaxContext      = 2048
+ChatLLM.MaxResponse     = 200
+ChatLLM.Temperature     = 0.8
+ChatLLM.TopP            = 0.9

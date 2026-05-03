@@ -33,6 +33,9 @@
 #include "Spells/SpellMgr.h"
 #include "Pools/PoolManager.h"
 #include "GameEvents/GameEventMgr.h"
+#ifdef BUILD_ELUNA
+#include "LuaEngine/LuaEngine.h"
+#endif
 
 #ifdef ENABLE_PLAYERBOTS
 #include "ahbot/AhBot.h"
@@ -591,6 +594,9 @@ ChatCommand* ChatHandler::getCommandTable()
         { "spawntime",      SEC_GAMEMASTER,     false, &ChatHandler::HandleNpcSpawnTimeCommand,        "", nullptr },
         { "say",            SEC_MODERATOR,      false, &ChatHandler::HandleNpcSayCommand,              "", nullptr },
         { "spelllist",      SEC_GAMEMASTER,     false, &ChatHandler::HandleNpcListSpells,              "", nullptr },
+#ifdef BUILD_CHATLLM
+        { "talk",           SEC_PLAYER,         false, &ChatHandler::HandleNpcTalkCommand,             "", nullptr },
+#endif
         { "textemote",      SEC_MODERATOR,      false, &ChatHandler::HandleNpcTextEmoteCommand,        "", nullptr },
         { "unfollow",       SEC_GAMEMASTER,     false, &ChatHandler::HandleNpcUnFollowCommand,         "", nullptr },
         { "whisper",        SEC_MODERATOR,      false, &ChatHandler::HandleNpcWhisperCommand,          "", nullptr },
@@ -1306,7 +1312,7 @@ void ChatHandler::CheckIntegrity(ChatCommand* table, ChatCommand* parentCommand)
         ChatCommand* command = &table[i];
 
         if (parentCommand && command->SecurityLevel < parentCommand->SecurityLevel)
-            sLog.outError("Subcommand '%s' of command '%s' have less access level (%u) that parent (%u)",
+            sLog.outDebug("Subcommand '%s' of command '%s' have less access level (%u) that parent (%u)",
                           command->Name, parentCommand->Name, command->SecurityLevel, parentCommand->SecurityLevel);
 
         if (!parentCommand && command->Name[0] == '\0')
@@ -1533,6 +1539,11 @@ void ChatHandler::ExecuteCommand(const char* text)
         }
         case CHAT_COMMAND_UNKNOWN_SUBCOMMAND:
         {
+#ifdef BUILD_ELUNA
+            if(Eluna* e = sWorld.GetEluna())
+                if (!e->OnCommand(m_session ? m_session->GetPlayer() : NULL, fullcmd.c_str()))
+                    return;
+#endif
             SendSysMessage(LANG_NO_SUBCMD);
             ShowHelpForCommand(command->ChildCommands, text);
             SetSentErrorMessage(true);
@@ -1540,6 +1551,11 @@ void ChatHandler::ExecuteCommand(const char* text)
         }
         case CHAT_COMMAND_UNKNOWN:
         {
+#ifdef BUILD_ELUNA
+            if (Eluna* e = sWorld.GetEluna())
+                if (!e->OnCommand(m_session ? m_session->GetPlayer() : NULL, fullcmd.c_str()))
+                    return;
+#endif
             SendSysMessage(LANG_NO_CMD);
             SetSentErrorMessage(true);
             break;

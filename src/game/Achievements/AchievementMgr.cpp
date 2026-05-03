@@ -46,6 +46,10 @@
 #include "Policies/Singleton.h"
 #include "World/WorldStateExpression.h"
 
+#ifdef BUILD_ELUNA
+#include "LuaEngine/LuaEngine.h"
+#endif
+
 INSTANTIATE_SINGLETON_1(AchievementGlobalMgr);
 
 namespace MaNGOS

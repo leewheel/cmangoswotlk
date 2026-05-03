@@ -31,6 +31,9 @@
 #include "BattleGround/BattleGroundMgr.h"
 #include <sstream>
 #include <iomanip>
+#ifdef BUILD_ELUNA
+#include "LuaEngine/LuaEngine.h"
+#endif
 
 INSTANTIATE_SINGLETON_1(LootMgr);
 

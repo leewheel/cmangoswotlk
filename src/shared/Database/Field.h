@@ -65,6 +65,9 @@ class Field
 
             return value;
         }
+        double GetDouble() const { return GetFloat(); }
+        int8 GetInt8() const { return static_cast<int8>(GetUInt8()); }
+        int64 GetInt64() const { return static_cast<int64>(GetUInt64()); }
         time_t GetTime() const;
 
         void SetType(enum DataTypes type) { mType = type; }

@@ -70,6 +70,10 @@
 #include "World/WorldState.h"
 #include "Anticheat/Anticheat.hpp"
 
+#ifdef BUILD_ELUNA
+#include "LuaEngine/LuaEngine.h"
+#endif
+
 #ifdef BUILD_DEPRECATED_PLAYERBOT
 #include "PlayerBot/Base/PlayerbotAI.h"
 #include "PlayerBot/Base/PlayerbotMgr.h"
@@ -1130,6 +1134,12 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
     SendEnvironmentalDamageLog(type, damage, absorb, resist);
 
     uint32 final_damage = Unit::DealDamage(this, this, damage, nullptr, damageType, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+
+#ifdef BUILD_ELUNA
+    if(Eluna* e = GetEluna())
+        if (!IsAlive())
+            e->OnPlayerKilledByEnvironment(this, type);
+#endif
 
     if (!IsAlive())
     {
@@ -2900,6 +2910,25 @@ bool Player::isAllowedWhisperFrom(ObjectGuid guid)
     return false;
 }
 
+bool Player::IsGroupVisibleFor(Player* player) const
+{
+    switch (sWorld.getConfig(CONFIG_UINT32_GROUP_VISIBILITY))
+    {
+    default:
+        return IsInSameGroupWith(player);
+    case 1:
+        return IsInSameRaidWith(player);
+    case 2:
+        return GetTeam() == player->GetTeam();
+    }
+}
+
+bool Player::IsInSameGroupWith(Player const* player) const
+{
+    return (player == this || (GetGroup() != NULL &&
+        GetGroup()->SameSubGroup(this, player)));
+}
+
 ///- If the player is invited, remove him. If the group if then only 1 person, disband the group.
 void Player::UninviteFromGroup()
 {
@@ -3117,6 +3146,15 @@ void Player::GiveLevel(uint32 level)
     GetSession()->SetCurrentPlayerLevel(level);
     SendQuestGiverStatusMultiple();
 }
+
+#ifdef BUILD_ELUNA
+void Player::SetFreeTalentPoints(uint32 points)
+{
+    if (Eluna* e = GetEluna())
+        e->OnFreeTalentPointsChanged(this, points);
+    SetUInt32Value(PLAYER_CHARACTER_POINTS1, points);
+}
+#endif
 
 void Player::UpdateFreeTalentPoints(bool resetIfNeed)
 {
@@ -3541,11 +3579,8 @@ bool Player::addSpell(uint32 spell_id, bool active, bool learning, bool dependen
         // do character spell book cleanup (all characters)
         if (!IsInWorld() && !learning)                      // spell load case
         {
-            sLog.outError("Player::addSpell: nonexistent in SpellStore spell #%u request, deleting for all characters in `character_spell`.", spell_id);
             CharacterDatabase.PExecute("DELETE FROM character_spell WHERE spell = '%u'", spell_id);
         }
-        else
-            sLog.outError("Player::addSpell: nonexistent in SpellStore spell #%u request.", spell_id);
 
         return false;
     }
@@ -4530,6 +4565,12 @@ bool Player::HasActiveSpell(uint32 spell) const
 
     PlayerSpell const& playerSpell = itr->second;
     return playerSpell.state != PLAYERSPELL_REMOVED && playerSpell.active && !playerSpell.disabled;
+}
+
+bool Player::HasTalent(uint32 spell, uint8 spec) const
+{
+    PlayerTalentMap::const_iterator itr = m_talents[spec].find(spell);
+    return (itr != m_talents[spec].end() && itr->second.state != PLAYERSPELL_REMOVED);
 }
 
 TrainerSpellState Player::GetTrainerSpellState(TrainerSpell const* trainer_spell, uint32 reqLevel) const
@@ -6457,6 +6498,37 @@ void Player::UpdateSkillTrainedSpells(uint16 id, uint16 currVal)
                 addSpell(pAbility->spellId, true, true, true, false);
             else
                 learnSpell(pAbility->spellId, true);
+        }
+    }
+}
+
+void Player::UpdateSkillsToMaxSkillsForLevel()
+{
+    for (SkillStatusMap::iterator itr = mSkillStatus.begin(); itr != mSkillStatus.end(); ++itr)
+    {
+        SkillStatusData& skillStatus = itr->second;
+        if (skillStatus.uState == SKILL_DELETED)
+        {
+            continue;
+        }
+
+        uint32 pskill = itr->first;
+        if (IsProfessionOrRidingSkill(pskill))
+        {
+            continue;
+        }
+        uint32 valueIndex = PLAYER_SKILL_VALUE_INDEX(skillStatus.pos);
+        uint32 data = GetUInt32Value(valueIndex);
+
+        uint32 max = SKILL_MAX(data);
+
+        if (max > 1)
+        {
+            SetUInt32Value(valueIndex, MAKE_SKILL_VALUE(max, max));
+            if (skillStatus.uState != SKILL_NEW)
+            {
+                skillStatus.uState = SKILL_CHANGED;
+            }
         }
     }
 }
@@ -15492,6 +15564,28 @@ void Player::AreaExploredOrEventHappens(uint32 questId)
         }
         if (CanCompleteQuest(questId))
             CompleteQuest(questId);
+    }
+}
+
+// not used in mangosd, function for external script library
+void Player::GroupEventHappens(uint32 quest_id, WorldObject const* pEventObject)
+{
+    if (Group* pGroup = GetGroup())
+    {
+        for (GroupReference* itr = pGroup->GetFirstMember(); itr != NULL; itr = itr->next())
+        {
+            Player* pGroupGuy = itr->getSource();
+
+            // for any leave or dead (with not released body) group member at appropriate distance
+            if (pGroupGuy && pGroupGuy->IsAtGroupRewardDistance(pEventObject) && !pGroupGuy->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            {
+                pGroupGuy->AreaExploredOrEventHappens(quest_id);
+            }
+        }
+    }
+    else
+    {
+        AreaExploredOrEventHappens(quest_id);
     }
 }
 
@@ -24751,6 +24845,24 @@ void Player::UpdateSpecCount(uint8 count)
     SendTalentsInfoData(false);
 }
 
+#ifdef BUILD_ELUNA
+void Player::ModifyMoney(int32 d)
+{
+    // used by eluna
+    if (Eluna* e = GetEluna())
+        e->OnMoneyChanged(this, d);
+
+    if (d < 0)
+        SetMoney(GetMoney() > uint32(-d) ? GetMoney() + d : 0);
+    else
+        SetMoney(GetMoney() < uint32(MAX_MONEY_AMOUNT - d) ? GetMoney() + d : MAX_MONEY_AMOUNT);
+
+    // "At Gold Limit"
+    if (GetMoney() >= MAX_MONEY_AMOUNT)
+        SendEquipError(EQUIP_ERR_TOO_MUCH_GOLD, nullptr, nullptr);
+}
+#endif
+
 void Player::RemoveAtLoginFlag(AtLoginFlags f, bool in_db_also /*= false*/)
 {
     m_atLoginFlags &= ~f;
@@ -25428,6 +25540,48 @@ void Player::AddCooldown(SpellEntry const& spellEntry, ItemPrototype const* item
             SendDirectMessage(data);
             sLog.outDebug("Sending SMSG_COOLDOWN_EVENT with spell id = %u", spellEntry.Id);
         }
+    }
+}
+
+bool Player::HasSpellCooldown(uint32 spell_id) const
+{
+    auto itr = m_cooldownMap.FindBySpellId(spell_id);
+    if (itr == m_cooldownMap.end())
+        return false;
+
+    auto& cdData = itr->second;
+    return cdData->IsPermanent() || !cdData->IsSpellCDExpired(GetMap()->GetCurrentClockTime()) || !cdData->IsCatCDExpired(GetMap()->GetCurrentClockTime());
+}
+
+time_t Player::GetSpellCooldownDelay(uint32 spell_id) const
+{
+    auto itr = m_cooldownMap.FindBySpellId(spell_id);
+    if (itr == m_cooldownMap.end())
+        return 0;
+
+    auto& cdData = itr->second;
+    if (cdData->IsPermanent())
+        return 0;
+
+    TimePoint now = GetMap()->GetCurrentClockTime();
+    if (cdData->IsSpellCDExpired(now))
+        return 0;
+
+    TimePoint expireTime;
+    if (!cdData->GetSpellCDExpireTime(expireTime))
+        return 0;
+
+    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(expireTime - now).count();
+    return remaining > 0 ? remaining : 0;
+}
+
+void Player::RemoveSpellCooldown(uint32 spell_id, bool updateClient /* = false */)
+{
+    m_cooldownMap.RemoveBySpellId(spell_id);
+
+    if (updateClient)
+    {
+        SendClearCooldown(spell_id, this);
     }
 }
 

@@ -30,6 +30,10 @@
 #include "BattleGround/BattleGroundMgr.h"
 #include <future>
 
+#ifdef BUILD_ELUNA
+#include "LuaEngine/LuaEngine.h"
+#endif
+
 #define CLASS_LOCK MaNGOS::ClassLevelLockable<MapManager, std::recursive_mutex>
 INSTANTIATE_SINGLETON_2(MapManager, CLASS_LOCK);
 INSTANTIATE_CLASS_MUTEX(MapManager, std::recursive_mutex);
@@ -145,6 +149,11 @@ Map* MapManager::CreateMap(uint32 id, const WorldObject* obj)
             m->Initialize();
         }
     }
+
+#ifdef BUILD_ELUNA
+    if (Eluna* e = m->GetEluna())
+        e->OnCreate(m);
+#endif
 
     return m;
 }

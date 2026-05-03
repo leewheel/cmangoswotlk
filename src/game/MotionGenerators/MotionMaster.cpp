@@ -428,7 +428,7 @@ void MotionMaster::MovePath(std::vector<G3D::Vector3>& path, ForcedMovement forc
 
 void MotionMaster::MovePath(std::vector<G3D::Vector3>& path, float o, ForcedMovement forcedMovement, bool flying)
 {
-    if (path.empty())
+    if (path.size() < 2)
         return;
 
     const auto& dest = path.back();

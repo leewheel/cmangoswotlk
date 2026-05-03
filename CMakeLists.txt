@@ -85,6 +85,10 @@ if(MSVC)
   # It creates "CMakePredefinedTargets" folder by default and adds CMake
   # defined projects like INSTALL.vcproj and ZERO_CHECK.vcproj
   set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
+  # Support UTF-8 source files (e.g. Chinese characters in string literals)
+  add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
+  add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 endif()
 
 # set default buildoptions and print them
@@ -437,6 +441,42 @@ if(MSVC)
   elseif(BUILD_RECASTDEMOMOD)
     set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT "RecastDemoMod")
   endif()
+endif()
+
+if(BUILD_SOLOCRAFT)
+  set_property(TARGET game mangosd APPEND PROPERTY COMPILE_DEFINITIONS BUILD_SOLOCRAFT)
+  if(BUILD_PLAYERBOTS)
+    set_property(TARGET playerbots APPEND PROPERTY COMPILE_DEFINITIONS BUILD_SOLOCRAFT)
+  endif()
+endif()
+
+if(BUILD_ELUNA)
+  set_property(TARGET game shared mangosd APPEND PROPERTY COMPILE_DEFINITIONS BUILD_ELUNA ELUNA_CMANGOS ELUNA_EXPANSION=2)
+  set_property(TARGET game mangosd APPEND PROPERTY INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/dep/lualib)
+  set_property(TARGET game mangosd APPEND PROPERTY INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/src/game/LuaEngine/hooks)
+  set_property(TARGET game APPEND PROPERTY INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/src/game/LuaEngine/)
+  set_property(TARGET game APPEND PROPERTY INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/src/game/LuaEngine/methods/CMangos)
+  set_property(TARGET game APPEND PROPERTY LINK_LIBRARIES ${LIBRARY_NAME} PRIVATE lualib)
+  set_property(TARGET mangosd APPEND PROPERTY LINK_LIBRARIES ${EXECUTABLE_NAME} lualib)
+  if(BUILD_PLAYERBOTS)
+    set_property(TARGET playerbots APPEND PROPERTY COMPILE_DEFINITIONS BUILD_ELUNA ELUNA_CMANGOS ELUNA_EXPANSION=2)
+    set_property(TARGET playerbots APPEND PROPERTY INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/src/game/LuaEngine/hooks)
+    set_property(TARGET playerbots APPEND PROPERTY LINK_LIBRARIES ${LIBRARY_NAME} PRIVATE lualib)
+  endif()
+endif()
+
+# Anti-decompile / hardening for Release builds
+if(MSVC)
+  # Omit frame pointer (harder to trace call stack)
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Oy-")
+  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /Oy-")
+  # Enable string pooling (merge identical strings, harder to search)
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /GF")
+  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /GF")
+  # Remove debug info from PE in Release
+  set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG:NONE")
+  # Aggressive linker optimization
+  set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /OPT:REF /OPT:ICF=5")
 endif()
 
 # if(SQL)

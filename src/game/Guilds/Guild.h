@@ -21,6 +21,7 @@
 
 #define WITHDRAW_MONEY_UNLIMITED    0xFFFFFFFF
 #define WITHDRAW_SLOT_UNLIMITED     0xFFFFFFFF
+#define GUILD_RANK_NONE 0xFF
 
 #include "Common.h"
 #include "Entities/Item.h"
@@ -326,6 +327,7 @@ class Guild
         void SetLeader(ObjectGuid guid);
         bool AddMember(ObjectGuid plGuid, uint32 plRank);
         bool DelMember(ObjectGuid guid, bool isDisbanding = false);
+        bool ChangeMemberRank(ObjectGuid guid, uint8 newRank);
         // lowest rank is the count of ranks - 1 (the highest rank_id in table)
         uint32 GetLowestRank() const { return m_Ranks.size() - 1; }
 

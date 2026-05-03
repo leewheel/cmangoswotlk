@@ -19,6 +19,9 @@
 #include "Chat/Chat.h"
 #include "Server/WorldSession.h"
 #include "Entities/Creature.h"
+#ifdef BUILD_CHATLLM
+#include "AI/ChatLLM/ChatLLM.h"
+#endif
 
 bool ChatHandler::HandleNpcListSpells(char* /*args*/)
 {
@@ -37,3 +40,27 @@ bool ChatHandler::HandleNpcListSpells(char* /*args*/)
 
     return true;
 }
+
+#ifdef BUILD_CHATLLM
+bool ChatHandler::HandleNpcTalkCommand(char* args)
+{
+    Creature* creature = getSelectedCreature();
+    if (!creature)
+    {
+        SendSysMessage("You must select a creature.");
+        return true;
+    }
+
+    if (!*args)
+    {
+        SendSysMessage("Usage: .npc talk <message>");
+        return true;
+    }
+
+    Player* player = m_session ? m_session->GetPlayer() : nullptr;
+    if (!player) return false;
+
+    ChatLLM::HandleNPCWhisper(player, creature, std::string(args));
+    return true;
+}
+#endif

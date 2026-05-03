@@ -47,6 +47,11 @@
 #include "Spells/SpellMgr.h"
 #include "MotionGenerators/PathFinder.h"
 #include "Movement/MoveSpline.h"
+#ifdef BUILD_ELUNA
+#include "LuaEngine/LuaEngine.h"
+#include "LuaEngine/ElunaConfig.h"
+#include "LuaEngine/ElunaEventMgr.h"
+#endif
 
 Object::Object(): m_updateFlag(0), m_itsNewObject(false), m_dbGuid(0), m_scriptRef(this, NoopObjectDeleter())
 {
@@ -2391,6 +2396,31 @@ Creature* WorldObject::SummonCreature(uint32 id, float x, float y, float z, floa
     return WorldObject::SummonCreature(TempSpawnSettings(this, id, x, y, z, ang, spwtype, despwtime, asActiveObject, setRun, pathId, faction, modelId, spawnCounting, forcedOnTop), GetMap(), GetPhaseMask());
 }
 
+GameObject* WorldObject::SummonGameObject(uint32 id, float x, float y, float z, float angle, uint32 despwtime)
+{
+    GameObject* gameobject = new GameObject;
+
+    Map* map = GetMap();
+
+    if (!map)
+    {
+        return NULL;
+    }
+
+    if (!gameobject->Create(map->GenerateLocalLowGuid(HIGHGUID_GAMEOBJECT), map->GenerateLocalLowGuid(HIGHGUID_GAMEOBJECT), id, map, GetPhaseMask(), x, y, z, angle))
+    {
+        delete gameobject;
+        return NULL;
+    }
+
+    gameobject->SetRespawnTime(despwtime / IN_MILLISECONDS);
+
+    map->Add(gameobject);
+    gameobject->AIM_Initialize();
+
+    return gameobject;
+}
+
 GameObject* WorldObject::SpawnGameObject(uint32 dbGuid, Map* map, uint32 forcedEntry, GenericTransport* transport)
 {
     GameObjectData const* data = sObjectMgr.GetGOData(dbGuid);
@@ -3467,3 +3497,36 @@ bool WorldObject::CheckAndIncreaseCastCounter()
     ++m_castCounter;
     return true;
 }
+
+#ifdef BUILD_ELUNA
+Eluna* WorldObject::GetEluna() const
+{
+    if (IsInWorld())
+        return GetMap()->GetEluna();
+
+    return nullptr;
+}
+
+ElunaEventProcessor* WorldObject::GetElunaEvents(int32 mapId)
+{
+    Eluna* eluna = mapId == -1 ? sWorld.GetEluna() : GetEluna();
+    if (!eluna)
+        return nullptr;
+
+    EventMgr* mgr = eluna->eventMgr.get();
+    if (!mgr)
+        return nullptr;
+
+    // Select the correct ProcessorInfo slot
+    std::unique_ptr<ElunaProcessorInfo>& info = (mapId == -1) ? elunaWorldEvents : elunaMapEvents;
+
+    // Lazily create processor + ProcessorInfo handle
+    if (!info)
+    {
+        uint64 id = mgr->CreateObjectProcessor(this);
+        info = std::make_unique<ElunaProcessorInfo>(mgr, id);
+    }
+
+    return mgr->GetObjectProcessor(info->GetProcessorId());
+}
+#endif

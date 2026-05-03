@@ -35,6 +35,10 @@
 #include "Grids/Cell.h"
 #include "Util/UniqueTrackablePtr.h"
 #include "Utilities/EventProcessor.h"
+#ifdef BUILD_ELUNA
+#include "LuaEngine/LuaValue.h"
+#include "LuaEngine/ElunaEventMgr.h"
+#endif
 
 #include <set>
 
@@ -120,6 +124,11 @@ class ChatHandler;
 struct SpellEntry;
 class Spell;
 class GenericTransport;
+#ifdef BUILD_ELUNA
+class ElunaEventProcessor;
+class ElunaEventProcessorInfo;
+class Eluna;
+#endif
 
 // Spell cooldown flags sent in SMSG_SPELL_COOLDOWN
 enum SpellCooldownFlags
@@ -481,6 +490,7 @@ class Object
 
         void SetInt32Value(uint16 index,        int32  value);
         void SetUInt32Value(uint16 index,       uint32  value);
+        void UpdateUInt32Value(uint16 index, uint32 value) { ApplyModUInt32Value(index, value, true); }
         void SetUInt64Value(uint16 index, const uint64& value);
         void SetFloatValue(uint16 index,       float   value);
         void SetByteValue(uint16 index, uint8 offset, uint8 value);
@@ -634,6 +644,17 @@ class Object
         inline bool IsUnit() const { return isType(TYPEMASK_UNIT); }
         inline bool IsGameObject() const { return GetTypeId() == TYPEID_GAMEOBJECT; }
         inline bool IsCorpse() const { return GetTypeId() == TYPEID_CORPSE; }
+
+        Player* ToPlayer() { if (GetTypeId() == TYPEID_PLAYER) return reinterpret_cast<Player*>(this); else return NULL; }
+        Player const* ToPlayer() const { if (GetTypeId() == TYPEID_PLAYER) return reinterpret_cast<Player const*>(this); else return NULL; }
+        Creature* ToCreature() { if (GetTypeId() == TYPEID_UNIT) return reinterpret_cast<Creature*>(this); else return NULL; }
+        Creature const* ToCreature() const { if (GetTypeId() == TYPEID_UNIT) return reinterpret_cast<Creature const*>(this); else return NULL; }
+        Unit* ToUnit() { if (isType(TYPEMASK_UNIT)) return reinterpret_cast<Unit*>(this); else return NULL; }
+        Unit const* ToUnit() const { if (isType(TYPEMASK_UNIT)) return reinterpret_cast<Unit const*>(this); else return NULL; }
+        GameObject* ToGameObject() { if (GetTypeId() == TYPEID_GAMEOBJECT) return reinterpret_cast<GameObject*>(this); else return NULL; }
+        GameObject const* ToGameObject() const { if (GetTypeId() == TYPEID_GAMEOBJECT) return reinterpret_cast<GameObject const*>(this); else return NULL; }
+        Corpse* ToCorpse() { if (GetTypeId() == TYPEID_CORPSE) return reinterpret_cast<Corpse*>(this); else return NULL; }
+        Corpse const* ToCorpse() const { if (GetTypeId() == TYPEID_CORPSE) return reinterpret_cast<Corpse const*>(this); else return NULL; }
 
         MaNGOS::unique_weak_ptr<Object> GetWeakPtr() const { return m_scriptRef; }
 
@@ -1076,6 +1097,10 @@ class WorldObject : public Object
         float GetDistance(const WorldObject* obj, bool is3D = true, DistanceCalculation distcalc = DIST_CALC_BOUNDING_RADIUS) const;
         float GetDistance(float x, float y, float z, DistanceCalculation distcalc = DIST_CALC_BOUNDING_RADIUS, bool transport = false) const;
         float GetDistance2d(float x, float y, DistanceCalculation distcalc = DIST_CALC_BOUNDING_RADIUS, bool transport = false) const;
+        float GetDistance2d(const WorldObject* obj, DistanceCalculation distcalc = DIST_CALC_BOUNDING_RADIUS, bool transport = false) const
+        {
+            return (obj == this) ? 0.0f : GetDistance2d(obj->GetPositionX(), obj->GetPositionY(), distcalc, transport);
+        }
         float GetDistanceZ(const WorldObject* obj) const;
         bool IsInMapIgnorePhase(const WorldObject* obj) const // only to be used by spells which ignore phase during search and similar
         {
@@ -1188,6 +1213,7 @@ class WorldObject : public Object
         
         static Creature* SummonCreature(TempSpawnSettings settings, Map* map, uint32 phaseMask);
         Creature* SummonCreature(uint32 id, float x, float y, float z, float ang, TempSpawnType spwtype, uint32 despwtime, bool asActiveObject = false, bool setRun = false, uint32 pathId = 0, uint32 faction = 0, uint32 modelId = 0, bool spawnCounting = false, bool forcedOnTop = false);
+        GameObject* SummonGameObject(uint32 id, float x, float y, float z, float angle, uint32 despwtime);
 
         static GameObject* SpawnGameObject(uint32 dbGuid, Map* map, uint32 forcedEntry = 0, GenericTransport * transport = nullptr);
         static Creature* SpawnCreature(uint32 dbGuid, Map* map, uint32 forcedEntry = 0, GenericTransport* transport = nullptr);
@@ -1291,6 +1317,16 @@ class WorldObject : public Object
 
         // Spell mod owner: static player whose spell mods apply to this unit (server-side)
         virtual Player* GetSpellModOwner() const { return nullptr; }
+#ifdef BUILD_ELUNA
+        std::unique_ptr<ElunaProcessorInfo> elunaMapEvents;
+        std::unique_ptr<ElunaProcessorInfo> elunaWorldEvents;
+
+        Eluna* GetEluna() const;
+
+        ElunaEventProcessor* GetElunaEvents(int32 mapId);
+
+        LuaVal lua_data = LuaVal({});
+#endif
 
         void AddStringId(std::string& stringId);
         void RemoveStringId(std::string& stringId);

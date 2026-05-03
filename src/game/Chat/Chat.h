@@ -185,8 +185,10 @@ class ChatHandler
 
         void SendGlobalSysMessage(const char* str) const;
 
-        bool SetDataForCommandInTable(ChatCommand* commandTable, const char* text, uint32 security, std::string const& help);
+    public:
         void ExecuteCommand(const char* text);
+    protected:
+        bool SetDataForCommandInTable(ChatCommand* commandTable, const char* text, uint32 security, std::string const& help);
         void LogCommand(char const* fullcmd) const;
 
         bool ShowHelpForCommand(ChatCommand* table, const char* cmd);
@@ -503,6 +505,9 @@ class ChatHandler
         bool HandleNpcPlayEmoteCommand(char* args);
         bool HandleNpcSayCommand(char* args);
         bool HandleNpcListSpells(char* args);
+#ifdef BUILD_CHATLLM
+        bool HandleNpcTalkCommand(char* args);
+#endif
         bool HandleNpcShowLootCommand(char* args);
         bool HandleNpcSetModelCommand(char* args);
         bool HandleNpcSetMoveTypeCommand(char* args);

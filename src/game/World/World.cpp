@@ -75,6 +75,17 @@
 #include "Vmap/GameObjectModel.h"
 #include "Spells/SpellStacking.h"
 
+#ifdef BUILD_ELUNA
+#include "LuaEngine/LuaEngine.h"
+#include "LuaEngine/ElunaConfig.h"
+#include "LuaEngine/ElunaLoader.h"
+#endif
+
+#ifdef BUILD_CHATLLM
+#include "AI/ChatLLM/ChatLLM.h"
+#include "AI/ChatLLM/ChatLLMConfig.h"
+#endif
+
 #ifdef BUILD_AHBOT
  #include "AuctionHouseBot/AuctionHouseBot.h"
 #endif
@@ -147,6 +158,10 @@ World::World() : mail_timer(0), mail_timer_expires(0), m_NextDailyQuestReset(0),
 /// World destructor
 World::~World()
 {
+#ifdef BUILD_CHATLLM
+    ChatLLM::Shutdown();
+#endif
+
     // it is assumed that no other thread is accessing this data when the destructor is called.  therefore, no locks are necessary
 
     ///- Empty the kicked session set
@@ -640,6 +655,8 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_UINT32_GM_INVISIBLE_AURA, "GM.InvisibleAura", 37800);
     setConfig(CONFIG_BOOL_GM_TICKETS_QUEUE_STATUS, "GM.TicketsQueueStatus", true);
 
+    setConfig(CONFIG_UINT32_GROUP_VISIBILITY, "Visibility.GroupMode", 0);
+
     setConfig(CONFIG_UINT32_FOGOFWAR_STEALTH, "Visibility.FogOfWar.Stealth", 0);
     setConfig(CONFIG_UINT32_FOGOFWAR_HEALTH, "Visibility.FogOfWar.Health", 2);
     setConfig(CONFIG_UINT32_FOGOFWAR_STATS, "Visibility.FogOfWar.Stats", 0);
@@ -741,6 +758,7 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_FLOAT_GHOST_RUN_SPEED_WORLD,   "Death.Ghost.RunSpeed.World", 1.0f, 0.1f, 10.0f);
     setConfigMinMax(CONFIG_FLOAT_GHOST_RUN_SPEED_BG,      "Death.Ghost.RunSpeed.Battleground", 1.0f, 0.1f, 10.0f);
 
+    setConfig(CONFIG_FLOAT_THREAT_RADIUS, "ThreatRadius", 100.0f);
     setConfig(CONFIG_FLOAT_LEASH_RADIUS, "LeashRadius", 30.f);
     setConfigMin(CONFIG_UINT32_CREATURE_RESPAWN_AGGRO_DELAY, "CreatureRespawnAggroDelay", 5000, 0);
     setConfig(CONFIG_UINT32_CREATURE_PICKPOCKET_RESTOCK_DELAY, "CreaturePickpocketRestockDelay", 600);
@@ -927,6 +945,13 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_UINT32_SUNSREACH_COUNTER, "Sunsreach.CounterMax", 10000);
 
     setConfig(CONFIG_BOOL_REGEN_ZONE_AREA_ON_STARTUP, "Spawns.ZoneArea", false);
+#ifdef BUILD_ELUNA
+    if (reload)
+    {
+        if (Eluna* e = GetEluna())
+            e->OnConfigLoad(reload);
+    }
+#endif
 
     sLog.outString();
 }
@@ -1049,6 +1074,24 @@ void World::SetInitialWorldSettings()
     ///- Init highest guids before any guid using table loading to prevent using not initialized guids in some code.
     sObjectMgr.SetHighestGuids();                           // must be after PackInstances() and PackGroupIds()
     sLog.outString();
+
+#ifdef BUILD_ELUNA
+    sLog.outString("Loading Eluna config...");
+    sElunaConfig->Initialize();
+
+    if (sElunaConfig->IsElunaEnabled())
+    {
+        ///- Initialize Lua Engine
+        sLog.outString("Loading Lua scripts...");
+        sElunaLoader->LoadScripts();
+    }
+#endif
+
+#ifdef BUILD_CHATLLM
+    ///- Initialize ChatLLM
+    ChatLLM::LoadConfig();
+    ChatLLM::Initialize();
+#endif
 
     sLog.outString("Loading Page Texts...");
     sObjectMgr.LoadPageTexts();
