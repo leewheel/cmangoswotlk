@@ -227,7 +227,19 @@ int Master::Run()
         }
         std::string bindIp = sConfig.GetStringDefault("BindIP", "0.0.0.0");
         int32 port = int32(sWorld.getConfig(CONFIG_UINT32_PORT_WORLD));
-        MaNGOS::AsyncListener<WorldSocket> listener(m_context, bindIp, port);
+
+        std::unique_ptr<MaNGOS::AsyncListener<WorldSocket>> listener;
+        try
+        {
+            listener.reset(new MaNGOS::AsyncListener<WorldSocket>(m_context, bindIp, port));
+        }
+        catch (boost::system::system_error const& err)
+        {
+            sLog.outError("Failed to bind to %s:%d - %s", bindIp.c_str(), port, err.what());
+            sLog.outError("Possible reasons: the port is already in use by another process, or the address is invalid.");
+            sLog.WaitBeforeContinueIfNeed();
+            return 1;
+        }
 
         std::vector<std::thread> threads;
         for (int32 i = 0; i < networkThreadCount; ++i)
@@ -240,8 +252,18 @@ int Master::Run()
         bool raEnable = sConfig.GetBoolDefault("Ra.Enable", false);
         if (raEnable)
         {
-            raListener.reset(new MaNGOS::AsyncListener<RASocket>(m_raContext, raBindIp, raPort));
-            m_raThread = std::thread([this]() { m_raContext.run(); });
+            try
+            {
+                raListener.reset(new MaNGOS::AsyncListener<RASocket>(m_raContext, raBindIp, raPort));
+                m_raThread = std::thread([this]() { m_raContext.run(); });
+            }
+            catch (boost::system::system_error const& err)
+            {
+                sLog.outError("Failed to bind RA socket to %s:%d - %s", raBindIp.c_str(), raPort, err.what());
+                sLog.outError("Disable RA (Ra.Enable = 0) if you don't need it, or check if the port is already in use.");
+                sLog.WaitBeforeContinueIfNeed();
+                return 1;
+            }
         }
 
         std::unique_ptr<SOAPThread> soapThread;

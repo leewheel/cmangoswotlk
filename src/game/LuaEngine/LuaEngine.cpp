@@ -319,8 +319,9 @@ bool Eluna::ExecuteCall(int params, int res)
     // Check function type
     if (!lua_isfunction(L, base))
     {
-        ELUNA_LOG_ERROR("[Eluna]: Cannot execute call: registered value is %s, not a function.", luaL_tolstring(L, base, NULL));
-        ASSERT(false); // stack probably corrupt
+        ELUNA_LOG_ERROR("[Eluna]: Cannot execute call: registered value is %s, not a function. Removing invalid handler.", luaL_tolstring(L, base, NULL));
+        lua_settop(L, 0);
+        return 1;
     }
 
     bool usetrace = sElunaConfig->GetConfig(CONFIG_ELUNA_TRACEBACK);
@@ -929,7 +930,11 @@ void Eluna::CleanUpStack(int number_of_arguments)
 int Eluna::CallOneFunction(int number_of_functions, int number_of_arguments, int number_of_results)
 {
     ++number_of_arguments; // Caller doesn't know about `event_id`.
-    ASSERT(number_of_functions > 0 && number_of_arguments > 0 && number_of_results >= 0);
+    if (number_of_functions <= 0 || number_of_arguments <= 0)
+    {
+        ELUNA_LOG_ERROR("[Eluna]: CallOneFunction: invalid state (functions=%d, arguments=%d). Skipping.", number_of_functions, number_of_arguments);
+        return 0;
+    }
     // Stack: event_id, [arguments], [functions]
 
     int functions_top        = lua_gettop(L);

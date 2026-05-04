@@ -97,3 +97,6 @@ cmake_install.cmake
 # Module files
 #
 src/modules/
+
+# External dependencies
+dep/llama.cpp/

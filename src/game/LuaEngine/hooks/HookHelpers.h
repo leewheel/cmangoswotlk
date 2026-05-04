@@ -18,7 +18,12 @@
 template<typename K1, typename K2>
 int Eluna::SetupStack(BindingMap<K1>* bindings1, BindingMap<K2>* bindings2, const K1& key1, const K2& key2, int number_of_arguments)
 {
-    ASSERT(number_of_arguments == this->push_counter);
+    if (number_of_arguments != this->push_counter)
+    {
+        ELUNA_LOG_ERROR("[Eluna]: SetupStack mismatch: push_counter=%d, number_of_arguments=%d. Resetting state.", this->push_counter, number_of_arguments);
+        this->push_counter = 0;
+        number_of_arguments = 0;
+    }
     ASSERT(key1.event_id == key2.event_id);
     // Stack: [arguments]
 
@@ -29,7 +34,13 @@ int Eluna::SetupStack(BindingMap<K1>* bindings1, BindingMap<K2>* bindings2, cons
 
     int arguments_top = lua_gettop(L);
     int first_argument_index = arguments_top - number_of_arguments + 1;
-    ASSERT(arguments_top >= number_of_arguments);
+    if (arguments_top < number_of_arguments)
+    {
+        ELUNA_LOG_ERROR("[Eluna]: SetupStack corrupted stack: arguments_top=%d < number_of_arguments=%d. Clearing Lua stack.", arguments_top, number_of_arguments);
+        lua_settop(L, 0);
+        this->push_counter = 0;
+        return 0;
+    }
 
     lua_insert(L, first_argument_index);
     // Stack: event_id, [arguments]
@@ -49,7 +60,11 @@ int Eluna::SetupStack(BindingMap<K1>* bindings1, BindingMap<K2>* bindings2, cons
 template<typename T>
 void Eluna::ReplaceArgument(T value, uint8 index)
 {
-    ASSERT(index < lua_gettop(L) && index > 0);
+    if (index >= lua_gettop(L) || index <= 0)
+    {
+        ELUNA_LOG_ERROR("[Eluna]: ReplaceArgument: index %d out of bounds (top=%d). Skipping.", index, lua_gettop(L));
+        return;
+    }
     // Stack: event_id, [arguments], [functions], [results]
 
     Push(value);

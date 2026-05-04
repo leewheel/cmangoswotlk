@@ -63,8 +63,7 @@ set(LUA_SOURCE_FOLDER "${${LUA_VERSION}_SOURCE_DIR}/src")
 file(GLOB LOCAL_SOURCES_H ${LUA_SOURCE_FOLDER}/*.h)
 file(GLOB LOCAL_SOURCES_C ${LUA_SOURCE_FOLDER}/*.c)
 # Compile lua as C++ so it uses exceptions instead of longjmp
-# Disabled for now as some libraries expect lua to be C
-# set_source_files_properties(${LOCAL_SOURCES_H} ${LOCAL_SOURCES_C} PROPERTIES LANGUAGE CXX )
+set_source_files_properties(${LOCAL_SOURCES_H} ${LOCAL_SOURCES_C} PROPERTIES LANGUAGE CXX )
 list(REMOVE_ITEM LOCAL_SOURCES_C ${LUA_SOURCE_FOLDER}/lua.c)
 list(REMOVE_ITEM LOCAL_SOURCES_C ${LUA_SOURCE_FOLDER}/luac.c)
 
