@@ -257,6 +257,9 @@ class Quest
         uint32 GetRewHonorAddition() const { return RewHonorAddition; }
         float GetRewHonorMultiplier() const { return RewHonorMultiplier; }
         uint32 GetRewMoneyMaxLevel() const;
+        int32 GetRewArenaPoints() const { return RewArenaPoints; }
+        uint32 GetRewFactionFlags() const { return RewFactionFlags; }
+        uint32 GetRewUnkField() const { return RewUnkField; }
         // use in XP calculation at client
         uint32 GetRewSpell() const { return RewSpell; }
         uint32 GetRewSpellCast() const { return RewSpellCast; }
@@ -273,7 +276,6 @@ class Quest
         uint32 GetDetailsEmoteCount() const { return m_detailsemotecount; }
         uint32 GetQuestStartScript() const { return QuestStartScript; }
         uint32 GetQuestCompleteScript() const { return QuestCompleteScript; }
-        uint32 GetReputationSpilloverMask() const { return ReputationSpilloverMask; }
 
         bool   IsRepeatable() const { return (m_SpecialFlags & QUEST_SPECIAL_FLAG_REPEATABLE) != 0; }
         bool   IsAutoComplete() const { return !QuestMethod; }
@@ -386,6 +388,9 @@ class Quest
         float RewHonorMultiplier;
         int32  RewOrReqMoney;
         uint32 RewMoneyMaxLevel;
+        int32 RewArenaPoints;
+        uint32 RewFactionFlags;
+        uint32 RewUnkField;
         uint32 RewSpell;
         uint32 RewSpellCast;
         uint32 RewMailTemplateId;
@@ -400,7 +405,6 @@ class Quest
         uint32 CompleteEmoteDelay;
         uint32 QuestStartScript;
         uint32 QuestCompleteScript;
-        uint32 ReputationSpilloverMask;
 
         MaNGOS::unique_weak_ptr<Quest> m_weakRef;
 };

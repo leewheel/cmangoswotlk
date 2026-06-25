@@ -1,15 +1,18 @@
-
 name: Windows Build
 
 on: [push]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
-  REPO_DIR : ${{github.workspace}}
+  REPO_DIR: ${{github.workspace}}
   BUILD_DIR: ${{github.workspace}}/bin/builddir
   BOOST_TOOLSET: "msvc"
-  BOOST_VERSION: "1.83.0"
+  BOOST_VERSION: "1.87.0"
   BOOST_PLATFORM_VERSION: "2022"
 
 jobs:
@@ -45,7 +48,7 @@ jobs:
           toolset: ${{env.BOOST_TOOLSET}}
           # NOTE: If a boost version matching all requirements cannot be found,
           # this build step will fail
-          
+
       - name: Configure
         env:
           BOOST_ROOT: ${{ steps.install-boost.outputs.BOOST_ROOT }}
@@ -54,7 +57,7 @@ jobs:
       - name: Build
         env:
           MAKEFLAGS: "-j8"
-        run: cmake --build ${{env.BUILD_DIR}} --config ${{env.BUILD_TYPE}}
+        run: cmake --build ${{env.BUILD_DIR}} --config ${{env.BUILD_TYPE}} --parallel
 
       - name: Archive Files
         run: |
@@ -69,7 +72,7 @@ jobs:
 
   notify:
     name: Send Notification to Discord on Failure
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     permissions:
       contents: none
     needs: # make sure the notification is sent AFTER the jobs you want included have completed

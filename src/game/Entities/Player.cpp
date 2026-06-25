@@ -7355,7 +7355,7 @@ void Player::RewardReputation(Quest const* pQuest)
         {
             int32 rep = CalculateReputationGain(REPUTATION_SOURCE_QUEST, pQuest->RewRepValue[i] / 100, pQuest->RewMaxRepValue[i], pQuest->RewRepFaction[i], GetQuestLevelForPlayer(pQuest), true);
 
-            bool noSpillover = (pQuest->GetReputationSpilloverMask() & (1 << i)) != 0;
+            bool noSpillover = (pQuest->GetRewFactionFlags() & (1 << i)) != 0;
             if (FactionEntry const* factionEntry = sFactionStore.LookupEntry(pQuest->RewRepFaction[i]))
                 GetReputationMgr().ModifyReputation(factionEntry, rep, noSpillover);
         }
@@ -14742,6 +14742,9 @@ void Player::RewardQuest(Quest const* pQuest, uint32 reward, Object* questGiver,
         InitTalentForLevel();
     }
 
+    if (pQuest->GetRewArenaPoints())
+        ModifyArenaPoints(pQuest->GetRewArenaPoints());
+
     // Send reward mail
     if (uint32 mail_template_id = pQuest->GetRewMailTemplateId())
         MailDraft(mail_template_id).SendMailTo(this, questGiver, MAIL_CHECK_MASK_HAS_BODY, pQuest->GetRewMailDelaySecs());
@@ -16130,7 +16133,7 @@ void Player::SendQuestReward(Quest const* pQuest, uint32 XP, uint32 honor) const
 
     data << uint32(honor);                                  // new 2.3.0, HonorPoints
     data << uint32(pQuest->GetBonusTalents());              // bonus talents
-    data << uint32(0);                                      // arena points
+    data << uint32(pQuest->GetRewArenaPoints());            // arena points
     GetSession()->SendPacket(data);
 }
 
