@@ -29,7 +29,9 @@
 #include <thread>
 #include <cstdarg>
 
+#ifndef NDEBUG
 #include <boost/stacktrace.hpp>
+#endif
 
 INSTANTIATE_SINGLETON_1(Log);
 
@@ -1199,8 +1201,12 @@ void Log::traceLog()
 // has to be in a locked enviroment on linux
 std::string Log::GetTraceLog()
 {
+#ifndef NDEBUG
     std::lock_guard<std::mutex> guard(m_traceLogMtx);
     std::stringstream ss;
     ss << boost::stacktrace::stacktrace(); // warning - not async-safe - hence the locking
     return ss.str();
+#else
+    return "<stack trace disabled in release build>";
+#endif
 }
